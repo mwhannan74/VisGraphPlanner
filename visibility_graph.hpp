@@ -27,6 +27,7 @@
 #include <cstddef>
 #include <utility>
 #include <iostream>
+//#include <set>
 
 #include "figure.h" // mpocv visualisation dependency
 
@@ -39,6 +40,16 @@ namespace vg
     struct Edge { std::size_t to; double cost; };
     struct Vertex { Point2 pos; int poly_id; bool is_query; };
 
+    // Unified numeric tolerance for all geometric predicates
+    inline constexpr double EPS = 1e-12;
+
+    /**
+     * Position of a point relative to a simple CCW polygon.
+     * Inside: strictly inside the polygon area
+     * OnEdge: collinear with, and lying on, an edge or vertex
+     * Outside: strictly outside
+     */
+    enum class PointLocation { Outside, OnEdge, Inside };
 
     /**
      * @class VisibilityGraph
@@ -66,9 +77,7 @@ namespace vg
             {
                 if (poly.size() < 3)
                 {
-                    std::cerr << "[VG] Warning: polygon with "
-                        << poly.size()
-                        << " vertex/vertices ignored (need >=3).\n";
+                    std::cerr << "[VG] Warning: polygon with " << poly.size() << " vertex/vertices ignored (need >=3).\n";
                     continue;
                 }
                 _obstacles.push_back(poly);
@@ -88,16 +97,18 @@ namespace vg
         /**
          * @brief Build the obstacle-only visibility graph (O(N³)).
          *
-         * Recomputes @c adjacency_ from scratch using naive all-pairs
+         * Recomputes _adjacency from scratch using naive all-pairs
          * visibility checks.
          *
          * @warning Call only once after construction; subsequent calls will
          *          override any previously injected query vertices.
          */
-        void build()
+        void buildBasic()
         {
             const std::size_t n = _vertices.size();
             _adjacency.assign(n, {});
+            for (auto& nbrs : _adjacency)
+                nbrs.reserve(6);
 
             // All-pairs visibility test
             for (std::size_t i = 0; i < n; ++i)
@@ -105,6 +116,7 @@ namespace vg
                     if (visible(i, j))
                         addEdge(i, j);
         }
+
 
         /**
          * @brief Inject start & goal terminals and connect them.
@@ -116,8 +128,17 @@ namespace vg
          * Complexity O(N²) for each inserted point.
          */
         std::pair<std::size_t, std::size_t>
-            injectQueryPts(const Point2& S, const Point2& G)
+        injectQueryPts(const Point2& S, const Point2& G)
         {
+            // 4. Validate start/goal aren’t inside any obstacle
+            for (const auto& poly : _obstacles)
+            {
+                if (pointInPolygon(S, poly) == PointLocation::Inside)
+                    throw std::runtime_error("injectQueryPts: Start inside obstacle");
+                if (pointInPolygon(G, poly) == PointLocation::Inside)
+                    throw std::runtime_error("injectQueryPts: Goal inside obstacle");
+            }
+
             const std::size_t sid = addVertex(S, /*query=*/true, -1);
             const std::size_t gid = addVertex(G, /*query=*/true, -1);
 
@@ -136,16 +157,18 @@ namespace vg
          *
          * Complexity O(E log V) with binary heap.
          */
+        [[nodiscard]]
         std::vector<Point2> shortestPath(std::size_t s,
             std::size_t g) const
         {
+            assert(s < _vertices.size() && g < _vertices.size());
+
             const double INF = std::numeric_limits<double>::infinity();
             const std::size_t N = _vertices.size();
 
             std::vector<double>       dist(N, INF);
             std::vector<std::size_t>  prev(N, N);
 
-            // Min-heap of (distance, vertex)
             using Q = std::pair<double, std::size_t>;
             std::priority_queue<Q, std::vector<Q>, std::greater<>> pq;
 
@@ -156,8 +179,8 @@ namespace vg
             {
                 const auto [d, u] = pq.top();
                 pq.pop();
-                if (d > dist[u]) continue;   // Stale entry
-                if (u == g) break;           // Early exit
+                if (d > dist[u]) continue;   // stale
+                if (u == g) break;           // reached goal
 
                 for (const auto& e : _adjacency[u])
                 {
@@ -171,9 +194,8 @@ namespace vg
                 }
             }
 
-            if (dist[g] == INF) return {};   // No path
+            if (dist[g] == INF) return {};   // no path
 
-            // Reconstruct path (reverse)
             std::vector<Point2> path;
             for (auto v = g; v != N; v = prev[v])
                 path.push_back(_vertices[v].pos);
@@ -186,16 +208,14 @@ namespace vg
          *
          * @param start Start point (for marker).
          * @param goal  Goal point  (for marker).
-         * @param path  Polyline returned from shortestPath().
+         * @param path  Polyline returned from shortestPath() - Leave emtpy to not draw
          *
          * Render order: polygons -> graph edges -> path -> terminals.
          */
-        void visualize(const Point2& start,
-            const Point2& goal,
-            const std::vector<Point2>& path) const
+        void visualize(const Point2& start, const Point2& goal, const std::vector<Point2>& path = std::vector<Point2>(), int pixelSize = 1200) const
         {
             using namespace mpocv;
-            Figure fig(800, 800);
+            Figure fig(pixelSize, pixelSize);
 
             //  draw polygons 
             ShapeStyle st;
@@ -258,13 +278,21 @@ namespace vg
         const std::vector<Polygon>& obstacles() const { return _obstacles; }
         const std::vector<Vertex>& vertices()  const { return _vertices; }
         const std::vector<std::vector<Edge>>& adjacency() const { return _adjacency; }
+        
+        std::size_t VisibilityGraph::numEdges() const
+        {
+            std::size_t half = 0;
+            for (auto& nbrs : _adjacency) half += nbrs.size();
+            return half / 2;
+        }
 
     private:
 
         // Data
-        std::vector<Polygon>              _obstacles;
-        std::vector<Vertex>               _vertices;
-        std::vector<std::vector<Edge>>    _adjacency;
+        std::vector<Polygon>              _obstacles; // input polygon for each obstacle
+        std::vector<Vertex>               _vertices;  // vertices from each obstalce
+        std::vector<std::vector<Edge>>    _adjacency; //  for each vertex, the list of adjacent edges (i.e. the vertices directly visible/connected to it).
+
 
         /**
          * @brief Adds a new vertex to the graph.
@@ -295,6 +323,8 @@ namespace vg
          */
         void addEdge(std::size_t i, std::size_t j)
         {
+            assert(i < _vertices.size() && j < _vertices.size());
+
             const double w = (_vertices[i].pos - _vertices[j].pos).norm();
             _adjacency[i].push_back({ j, w });
             _adjacency[j].push_back({ i, w });
@@ -313,10 +343,12 @@ namespace vg
          */
         bool visible(std::size_t i, std::size_t j) const
         {
+            assert(i < _vertices.size() && j < _vertices.size());
+
             const Segment2 seg{ _vertices[i].pos, _vertices[j].pos };
+            if ((seg.a - seg.b).squaredNorm() < EPS * EPS) return false;
 
-            if ((seg.a - seg.b).squaredNorm() < 1e-24) return false;
-
+            // 2. Floating‐point vertex equality replaced by ε‐test
             for (const auto& poly : _obstacles)
             {
                 const std::size_t m = poly.size();
@@ -324,8 +356,10 @@ namespace vg
                 {
                     const std::size_t k2 = (k + 1) % m;
 
-                    if ((poly[k] == seg.a) || (poly[k] == seg.b) ||
-                        (poly[k2] == seg.a) || (poly[k2] == seg.b))
+                    if (((poly[k] - seg.a).squaredNorm() < EPS * EPS) ||
+                        ((poly[k] - seg.b).squaredNorm() < EPS * EPS) ||
+                        ((poly[k2] - seg.a).squaredNorm() < EPS * EPS) ||
+                        ((poly[k2] - seg.b).squaredNorm() < EPS * EPS))
                         continue;
 
                     if (properIntersection(seg, { poly[k], poly[k2] }))
@@ -333,12 +367,13 @@ namespace vg
                 }
             }
 
+            // Same-polygon chord passes through interior?
             const int pidA = _vertices[i].poly_id;
             const int pidB = _vertices[j].poly_id;
             if (pidA != -1 && pidA == pidB)
             {
                 const Point2 mid = 0.5 * (seg.a + seg.b);
-                if (pointInPolygon(mid, _obstacles[pidA]))
+                if (pointInPolygon(mid, _obstacles[pidA]) == PointLocation::Inside)
                     return false;
             }
             return true;
@@ -409,58 +444,71 @@ namespace vg
          * @return true if the segments intersect (or touch at endpoints),
          *         false otherwise.
          *
-         * @note Numerical stability is controlled with an epsilon threshold.
          * @note Complexity: O(1)
-         */
+         */        
         static bool properIntersection(const Segment2& s1, const Segment2& s2)
         {
+            if ((s1.a - s1.b).squaredNorm() < EPS * EPS) return false;
+            if ((s2.a - s2.b).squaredNorm() < EPS * EPS) return false;
+
+            // 5. Axis-aligned bounding-box rejection
+            const double min1x = std::min(s1.a.x(), s1.b.x()), max1x = std::max(s1.a.x(), s1.b.x());
+            const double min2x = std::min(s2.a.x(), s2.b.x()), max2x = std::max(s2.a.x(), s2.b.x());
+            if (max1x < min2x || max2x < min1x) return false;
+            const double min1y = std::min(s1.a.y(), s1.b.y()), max1y = std::max(s1.a.y(), s1.b.y());
+            const double min2y = std::min(s2.a.y(), s2.b.y()), max2y = std::max(s2.a.y(), s2.b.y());
+            if (max1y < min2y || max2y < min1y) return false;
+
             const double o1 = orient2D(s1.a, s1.b, s2.a);
             const double o2 = orient2D(s1.a, s1.b, s2.b);
             const double o3 = orient2D(s2.a, s2.b, s1.a);
             const double o4 = orient2D(s2.a, s2.b, s1.b);
-            constexpr double eps = 1e-12;
 
-            if ((o1 * o2 < -eps) && (o3 * o4 < -eps)) return true;
-            if (std::abs(o1) < eps && onSegment(s1.a, s1.b, s2.a)) return true;
-            if (std::abs(o2) < eps && onSegment(s1.a, s1.b, s2.b)) return true;
-            if (std::abs(o3) < eps && onSegment(s2.a, s2.b, s1.a)) return true;
-            if (std::abs(o4) < eps && onSegment(s2.a, s2.b, s1.b)) return true;
+            if ((o1 * o2 < -EPS) && (o3 * o4 < -EPS)) return true;
+            if (std::abs(o1) < EPS && onSegment(s1.a, s1.b, s2.a)) return true;
+            if (std::abs(o2) < EPS && onSegment(s1.a, s1.b, s2.b)) return true;
+            if (std::abs(o3) < EPS && onSegment(s2.a, s2.b, s1.a)) return true;
+            if (std::abs(o4) < EPS && onSegment(s2.a, s2.b, s1.b)) return true;
+
             return false;
         }
 
         /**
-         * @brief Determines whether a 2D point lies inside a polygon.
+         * @brief Classifies a point with respect to a polygon (even-odd rule).
          *
-         * Implements the even-odd (crossing number) rule. Counts the number of
-         * edge crossings along a ray extending from the point horizontally.
-         * Odd crossings mean the point is inside.
+         * Implements the crossing-number test.  If the point lies exactly on any edge,
+         * it is reported as PointLocation::OnEdge; otherwise the usual inside / outside
+         * result is returned.
          *
-         * @param p The query point.
-         * @param poly A simple (non-intersecting), CCW-ordered polygon.
-         * @return true if the point lies strictly inside the polygon,
-         *         false if outside or on the edge.
+         * @param p    Query point.
+         * @param poly Simple, non-self-intersecting polygon in CCW order.
+         * @return     PointLocation enum value.
          *
-         * @note Uses a small epsilon (1e-18) to guard against division-by-zero.
-         * @note Complexity: O(n), where n = poly.size().
+         * Complexity O(n) where n = poly.size().
          */
-        static bool pointInPolygon(const Point2& p, const Polygon& poly)
+        static PointLocation pointInPolygon(const Point2& p,
+            const Polygon& poly)
         {
             bool inside = false;
             const std::size_t n = poly.size();
+
             for (std::size_t i = 0, j = n - 1; i < n; j = i++)
             {
-                const Point2& pi = poly[i];
-                const Point2& pj = poly[j];
-                const bool hit = ((pi.y() > p.y()) != (pj.y() > p.y())) &&
-                    (p.x() < (pj.x() - pi.x()) * (p.y() - pi.y()) /
-                        (pj.y() - pi.y() + 1e-18) +
-                        pi.x());
+                const Point2& a = poly[j];
+                const Point2& b = poly[i];
+
+                // Boundary test (collinear and within segment)
+                const double o = orient2D(a, b, p);
+                if (std::abs(o) < EPS && onSegment(a, b, p))
+                    return PointLocation::OnEdge;
+
+                // Ray-casting toggle
+                const bool hit = ((a.y() > p.y()) != (b.y() > p.y())) &&
+                                 (p.x() < (b.x() - a.x()) * (p.y() - a.y()) / (b.y() - a.y() + EPS) + a.x());
                 if (hit) inside = !inside;
             }
-            return inside;
+            return inside ? PointLocation::Inside : PointLocation::Outside;
         }
-
     };
-
 } // namespace vg
 
