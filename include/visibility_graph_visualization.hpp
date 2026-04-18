@@ -1,3 +1,21 @@
+/*
+ * visibility_graph_visualization.hpp – Reusable plotting helpers for
+ * vg::VisibilityGraph using MatPlotOpenCV.
+ *
+ * ────
+ * Core features
+ *   • Renders polygon obstacles, graph edges, and an optional shortest path.
+ *   • Highlights start and goal query points.
+ *   • Keeps plotting support separate from the core planner header.
+ *
+ * Example:
+ *   vg::VisibilityGraph vg(obstacles);
+ *   vg.buildBasic();
+ *   auto ids = vg.injectQueryPts(S, G);
+ *   auto path = vg.shortestPath(ids.first, ids.second);
+ *   vg::visualize(vg, S, G, path);
+ * ────
+ */
 #pragma once
 
 #include "visibility_graph.hpp"
@@ -5,6 +23,18 @@
 
 namespace vg
 {
+    /**
+     * @brief Visualize a visibility graph, query points, and optional path.
+     *
+     * Draws the obstacle polygons first, then graph edges, then the shortest
+     * path polyline if provided, and finally the start/goal markers.
+     *
+     * @param graph     Visibility graph to render.
+     * @param start     Start query point.
+     * @param goal      Goal query point.
+     * @param path      Optional path returned from shortestPath().
+     * @param pixelSize Figure width/height in pixels.
+     */
     inline void visualize(const VisibilityGraph& graph,
         const Point2& start,
         const Point2& goal,
@@ -21,6 +51,7 @@ namespace vg
         obstacleStyle.fill_color = Color::Blue();
         obstacleStyle.fill_alpha = 0.1f;
 
+        // Draw obstacle polygons.
         for (const auto& poly : graph.obstacles())
         {
             std::vector<double> x;
@@ -37,6 +68,7 @@ namespace vg
             fig.polygon(x, y, obstacleStyle);
         }
 
+        // Draw each undirected graph edge once.
         const auto& adjacency = graph.adjacency();
         const auto& vertices = graph.vertices();
         for (std::size_t i = 0; i < adjacency.size(); ++i)
@@ -51,6 +83,7 @@ namespace vg
             }
         }
 
+        // Draw the shortest path polyline when supplied.
         if (!path.empty())
         {
             std::vector<double> px;
@@ -67,6 +100,7 @@ namespace vg
             fig.plot(px, py, Color::Red(), 2.5f, "Path");
         }
 
+        // Draw query terminals last so they stay visible on top.
         fig.scatter({ start.x() }, { start.y() }, Color::Green(), 6.0f, "Start");
         fig.scatter({ goal.x() }, { goal.y() }, Color::Red(), 6.0f, "Goal");
 
