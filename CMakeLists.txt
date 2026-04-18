@@ -1,21 +1,4 @@
-﻿# CMakeLists.txt – Minimal build script for the Visibility-Graph demo
-# -------------------------------------------------------------------
-# Generates an executable named `demo` that links against Eigen (header-only)
-# and the mpocv plotting library used by visualize().
-#
-# Usage:
-#   mkdir build && cd build
-#   cmake -DEIGEN3_INCLUDE_DIR=/abs/path/to/eigen \
-#         -Dmpocv_DIR=/abs/path/to/mpocv/cmake ..     # if mpocv provides a config
-#   cmake --build . --config Release
-#
-# If mpocv does **not** supply a CMake package, set MPOCV_INCLUDE_DIR and
-# MPOCV_LIBS manually, e.g.:
-#   cmake -DMPOCV_INCLUDE_DIR=/p/to/mpocv/include \
-#         -DMPOCV_LIBS=/p/to/mpocv/lib/libmpocv.so ..
-# -------------------------------------------------------------------
-
-cmake_minimum_required(VERSION 3.16)
+﻿cmake_minimum_required(VERSION 3.16)
 project(VisibilityGraphDemo LANGUAGES CXX)
 
 # ---------- C++ settings -----------------------------------------------------
