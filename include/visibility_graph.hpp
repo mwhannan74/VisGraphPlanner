@@ -1,35 +1,32 @@
 ﻿/*
- * visibility_graph.hpp – Header-only 2-D visibility graph with built-in
- * visualisation support (mpocv::Figure).
+ * visibility_graph.hpp – Header-only 2-D visibility graph.
  *
  * ────
  * Core features
  *   • Naïve O(N³) obstacle-only build, query-time insertion of S & G.
  *   • Proper intersection tests plus “same-polygon chord” rejection.
  *   • Polygon-size validation (skips <3-vertex inputs with a warning).
- *   • visualize() member renders obstacles, VG edges and the shortest path.
  *
  * Example (see main_demo.cpp):
  *   vg::VisibilityGraph vg(obstacles);
  *   vg.build();
  *   auto ids  = vg.injectQueryPts(S,G);
  *   auto path = vg.shortestPath(ids.first, ids.second);
- *   vg.visualize(S,G,path);
  * ────
  */
 #pragma once
 
+#include <algorithm>
+#include <cassert>
 #include <Eigen/Core>
-#include <vector>
-#include <queue>
-#include <limits>
 #include <cmath>
 #include <cstddef>
-#include <utility>
 #include <iostream>
-//#include <set>
-
-#include "figure.h" // mpocv visualisation dependency
+#include <limits>
+#include <queue>
+#include <stdexcept>
+#include <utility>
+#include <vector>
 
 namespace vg
 {
@@ -203,83 +200,12 @@ namespace vg
             return path;
         }
 
-        /**
-         * @brief Convenience OpenCV plot of obstacles, graph, and path.
-         *
-         * @param start Start point (for marker).
-         * @param goal  Goal point  (for marker).
-         * @param path  Polyline returned from shortestPath() - Leave emtpy to not draw
-         *
-         * Render order: polygons -> graph edges -> path -> terminals.
-         */
-        void visualize(const Point2& start, const Point2& goal, const std::vector<Point2>& path = std::vector<Point2>(), int pixelSize = 1200) const
-        {
-            using namespace mpocv;
-            Figure fig(pixelSize, pixelSize);
-
-            //  draw polygons 
-            ShapeStyle st;
-            st.line_color = Color::Blue();
-            st.thickness = 1.5f;
-            st.fill_color = Color::Blue();
-            st.fill_alpha = 0.1f;
-
-            for (const auto& poly : _obstacles)
-            {
-                std::vector<double> x, y;
-                for (const auto& p : poly)
-                {
-                    x.push_back(p.x());
-                    y.push_back(p.y());
-                }
-                fig.polygon(x, y, st);
-            }
-
-            //  draw graph edges 
-            for (std::size_t i = 0; i < _adjacency.size(); ++i)
-            {
-                const auto& pi = _vertices[i].pos;
-                for (const auto& e : _adjacency[i])
-                {
-                    if (i >= e.to) continue; // Draw each undirected edge once
-                    const auto& pj = _vertices[e.to].pos;
-                    fig.plot({ pi.x(), pj.x() },
-                        { pi.y(), pj.y() },
-                        Color::Black(), 1.0f);
-                }
-            }
-
-            //  draw shortest path 
-            if (!path.empty())
-            {
-                std::vector<double> px, py;
-                for (const auto& pt : path)
-                {
-                    px.push_back(pt.x());
-                    py.push_back(pt.y());
-                }
-                fig.plot(px, py, Color::Red(), 2.5f, "Path");
-            }
-
-            // Terminals
-            fig.scatter({ start.x() }, { start.y() },
-                Color::Green(), 6.0f, "Start");
-            fig.scatter({ goal.x() }, { goal.y() },
-                Color::Red(), 6.0f, "Goal");
-
-            fig.grid(true);
-            fig.equal_scale(true);
-            fig.title("Visibility Graph");
-            fig.legend(true);
-            fig.show("Visibility Graph");
-        }
-
         // Read-only getters
         const std::vector<Polygon>& obstacles() const { return _obstacles; }
         const std::vector<Vertex>& vertices()  const { return _vertices; }
         const std::vector<std::vector<Edge>>& adjacency() const { return _adjacency; }
         
-        std::size_t VisibilityGraph::numEdges() const
+        std::size_t numEdges() const
         {
             std::size_t half = 0;
             for (auto& nbrs : _adjacency) half += nbrs.size();

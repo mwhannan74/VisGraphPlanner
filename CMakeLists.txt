@@ -1,25 +1,55 @@
-﻿cmake_minimum_required(VERSION 3.16)
-project(VisibilityGraphDemo LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.16)
+project(VisGraphPlanner LANGUAGES CXX)
 
 # ---------- C++ settings -----------------------------------------------------
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# ---------- Eigen (header-only) ----------------------------------------------
-set(EIGEN3_INCLUDE_DIR "C:/eigen")
-message(STATUS "Eigen include dir: ${EIGEN3_INCLUDE_DIR}")
-include_directories(${EIGEN3_INCLUDE_DIR})
+# ---------- Local dependency paths -------------------------------------------
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/local_paths.cmake")
 
-# ---------- mpocv plotting library -------------------------------------------
-add_subdirectory(
-    "C:/Users/mwhan/Documents/CODE_SANDBOX/CPlusPlus/Solutions/MatPlotOpenCV/MatPlotOpenCV"
-    "${CMAKE_BINARY_DIR}/external/mpocv"
+# ---------- Library target ---------------------------------------------------
+add_library(visgraph INTERFACE)
+add_library(VisGraphPlanner::visgraph ALIAS visgraph)
+
+target_include_directories(visgraph
+    INTERFACE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${VISGRAPH_EIGEN3_INCLUDE_DIR}"
 )
 
-# ---------- demo executable ---------------------------------------------------
-add_executable(demo
-    main_demo.cpp
-)
+# ---------- Demo executable --------------------------------------------------
+option(VISGRAPH_BUILD_DEMO "Build the main demo executable." ON)
+option(VISGRAPH_ENABLE_VISUALIZATION "Enable visualization support via MatPlotOpenCV." ON)
 
-target_link_libraries(demo PRIVATE mpocv)
+if(VISGRAPH_ENABLE_VISUALIZATION)
+    add_subdirectory(
+        "${VISGRAPH_MPOCV_SOURCE_DIR}"
+        "${CMAKE_BINARY_DIR}/external/mpocv"
+    )
+
+    add_library(visgraph_visualization INTERFACE)
+    add_library(VisGraphPlanner::visgraph_visualization ALIAS visgraph_visualization)
+
+    target_link_libraries(visgraph_visualization
+        INTERFACE
+            VisGraphPlanner::visgraph
+            mpocv
+    )
+endif()
+
+if(VISGRAPH_BUILD_DEMO)
+    if(NOT VISGRAPH_ENABLE_VISUALIZATION)
+        message(FATAL_ERROR "VISGRAPH_BUILD_DEMO requires VISGRAPH_ENABLE_VISUALIZATION to be ON.")
+    endif()
+
+    add_executable(main_demo
+        demo/main_demo.cpp
+    )
+
+    target_link_libraries(main_demo
+        PRIVATE
+            VisGraphPlanner::visgraph_visualization
+    )
+endif()

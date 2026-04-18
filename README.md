@@ -8,8 +8,14 @@ cmake ..
 cmake --build . --config Release
 ```
 
+Dependency paths are configured in `cmake/local_paths.cmake`.
+
+Targets:
+- `VisGraphPlanner::visgraph` for the core planner
+- `VisGraphPlanner::visgraph_visualization` for optional plotting support
+
 ## Run:
 From the build directory
 ```bash
-VisGraphPlanner\Release\demo.exe 
+Release\main_demo.exe
 ```

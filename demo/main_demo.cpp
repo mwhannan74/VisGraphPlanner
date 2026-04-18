@@ -10,6 +10,7 @@
 // ---------------------------------------------------------------------------
 
 #include "visibility_graph.hpp"
+#include "visibility_graph_visualization.hpp"
 
 #include <iostream>
 #include <chrono>
@@ -89,7 +90,7 @@ int main()
     std::cout << "Graph has " << vg.numEdges() << " edges\n";
 
     // 6. Visualise the obstacles, graph, and solution path
-    vg.visualize(S, G, path);
+    vg::visualize(vg, S, G, path);
 
     // 7. Console summary
     if (path.empty())
