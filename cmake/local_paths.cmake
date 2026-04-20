@@ -7,7 +7,7 @@ set(
 
 set(
     VISGRAPH_MPOCV_SOURCE_DIR
-    "${CMAKE_CURRENT_LIST_DIR}/../../MatPlotOpenCV/MatPlotOpenCV"
+    "${CMAKE_CURRENT_LIST_DIR}/../../MatPlotOpenCV"
     CACHE PATH
     "Path to the MatPlotOpenCV source directory."
 )
