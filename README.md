@@ -64,6 +64,20 @@ Graph has 915 edges
 Path found with 6 waypoints
 ```
 
+<p align="center">
+  <img
+    src="images/visibility_graph_demo.png"
+    alt="Visibility graph demo showing the planned path through polygonal obstacles"
+    width="700">
+</p>
+
+<p align="center">
+  <img
+    src="images/visibility_graph_demo_op_area.png"
+    alt="Visibility graph demo with an operation area"
+    width="700">
+</p>
+
 Values vary between runs because the demo randomizes the obstacle positions and start and goal points.
 
 With a single-configuration generator, the executable is normally `build/main_demo` (`build/main_demo.exe` on Windows). The exact location depends on the selected CMake generator and build configuration.
