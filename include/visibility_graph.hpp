@@ -71,8 +71,9 @@ namespace vg
          * @brief Construct from a list of convex, simple polygons.
          *
          * Polygons with <3 vertices are skipped with a warning.
-         * Obstacle vertices are copied into @c _vertices in input order.
-         * Valid polygons are normalized to counter-clockwise order. A repeated
+         * Valid polygons are normalized before their effective vertices are
+         * added to the graph. Polygons are converted to counter-clockwise
+         * order. A repeated
          * closing point, consecutive duplicates, and redundant collinear
          * boundary points are removed. Non-finite, self-intersecting,
          * degenerate, and concave polygons are rejected. Overlapping obstacles
@@ -140,12 +141,16 @@ namespace vg
          *
          * @pre buildBasic() has been called for the obstacle graph.
          * @throws std::logic_error if buildBasic() has not been called.
+         * @throws std::invalid_argument if S or G contains a non-finite
+         * coordinate.
          * @throws std::runtime_error if S or G is inside an obstacle or on its
-         * boundary.
+         * boundary, or is not strictly inside the operation area when one is
+         * configured.
          *
          * Any previous query vertices are removed before the new query is
-         * inserted. If S and G are coincident within EPS, one query vertex is
-         * inserted and its index is returned for both endpoints.
+         * inserted. If S and G are coincident within the scale-aware point
+         * tolerance, one query vertex is inserted and its index is returned
+         * for both endpoints.
          *
          * Complexity O(N²) for each inserted point.
          */
@@ -154,6 +159,13 @@ namespace vg
         {
             if (!_isBuilt)
                 throw std::logic_error("injectQueryPts: buildBasic() must be called first");
+
+            if (!isFinite(S))
+                throw std::invalid_argument(
+                    "injectQueryPts: Start contains a non-finite coordinate");
+            if (!isFinite(G))
+                throw std::invalid_argument(
+                    "injectQueryPts: Goal contains a non-finite coordinate");
 
             if (_hasOperationArea)
             {
@@ -258,7 +270,8 @@ namespace vg
             return _operationArea;
         }
 
-        // Original validated obstacles, including geometry outside an operation area.
+        // Normalized input obstacles before operation-area clipping, including
+        // geometry outside the operation area.
         const std::vector<Polygon>& originalObstacles() const { return _originalObstacles; }
 
         // Positive-area effective obstacles whose geometry changed during clipping.
@@ -277,6 +290,11 @@ namespace vg
         }
 
     private:
+
+        static bool isFinite(const Point2& point)
+        {
+            return std::isfinite(point.x()) && std::isfinite(point.y());
+        }
 
         /**
          * @brief Validates, filters, and flattens input obstacles.
@@ -413,7 +431,7 @@ namespace vg
                     if (i == j || iNext == j || jNext == i)
                         continue;
 
-                    if (properIntersection(first, { poly[j], poly[jNext] }))
+                    if (segmentsIntersect(first, { poly[j], poly[jNext] }))
                         return false;
                 }
             }
@@ -501,12 +519,15 @@ namespace vg
 
         static double signedAreaTwice(const Polygon& poly)
         {
+            // Translate to a nearby origin before multiplying coordinates.
+            // Polygon area is translation invariant, and this avoids the loss
+            // of precision caused by subtracting large global-coordinate
+            // products for a comparatively small polygon.
+            const Point2& origin = poly.front();
             double area = 0.0;
-            for (std::size_t i = 0; i < poly.size(); ++i)
+            for (std::size_t i = 1; i + 1 < poly.size(); ++i)
             {
-                const Point2& current = poly[i];
-                const Point2& next = poly[(i + 1) % poly.size()];
-                area += current.x() * next.y() - current.y() * next.x();
+                area += orient2D(origin, poly[i], poly[i + 1]);
             }
             return area;
         }
@@ -717,8 +738,8 @@ namespace vg
             const Segment2 seg{ _vertices[i].pos, _vertices[j].pos };
             if (pointsNear(seg.a, seg.b)) return false;
 
-            // Skip obstacle edges incident to a candidate endpoint, using EPS
-            // rather than exact floating-point equality.
+            // Skip obstacle edges incident to a candidate endpoint using the
+            // scale-aware point tolerance rather than exact equality.
             for (const auto& poly : _obstacles)
             {
                 const std::size_t m = poly.size();
@@ -732,7 +753,7 @@ namespace vg
                         pointsNear(poly[k2], seg.b))
                         continue;
 
-                    if (properIntersection(seg, { poly[k], poly[k2] }))
+                    if (segmentsIntersect(seg, { poly[k], poly[k2] }))
                         return false;
                 }
             }
@@ -817,7 +838,7 @@ namespace vg
          *
          * @note Complexity: O(1)
          */        
-        static bool properIntersection(const Segment2& s1, const Segment2& s2)
+        static bool segmentsIntersect(const Segment2& s1, const Segment2& s2)
         {
             if (pointsNear(s1.a, s1.b)) return false;
             if (pointsNear(s2.a, s2.b)) return false;

@@ -99,6 +99,9 @@ namespace vg
                 fig.polygon(x, y, style);
                 if (i == 0 && poly.size() >= 2)
                 {
+                    // MatPlotOpenCV polygon entries do not preserve the shape's
+                    // outline color in the legend. Overlay one edge to create
+                    // an accurate legend sample for this polygon group.
                     fig.plot(
                         { poly[0].x(), poly[1].x() },
                         { poly[0].y(), poly[1].y() },

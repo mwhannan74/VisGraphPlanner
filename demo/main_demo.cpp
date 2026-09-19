@@ -1,4 +1,4 @@
-﻿// main_demo.cpp – Enhanced demo of the VisibilityGraph class with 20 non‐overlapping obstacles.
+﻿// main_demo.cpp - Enhanced demo of the VisibilityGraph class with 25 non-overlapping obstacles.
 //
 // Build example (Linux, GCC):
 //   g++ -std=c++17 -O2 main_demo.cpp \
@@ -23,7 +23,7 @@ using namespace vg;
 
 int main()
 {
-    // 1. Create # non‐overlapping square obstacles in a mxn grid    
+    // 1. Create non-overlapping square obstacles in a rows-by-columns grid.
     const int rows = 5, cols = 5;
     const double size = 5.0;
     const double gap = 5.0;
@@ -86,13 +86,16 @@ int main()
 
     // 4. Inject S/G and solve for shortest path
     auto [sid, gid] = vg.injectQueryPts(S, G);
-    auto path = vg.shortestPath(sid, gid);
     const auto t2 = std::chrono::high_resolution_clock::now();
+    auto path = vg.shortestPath(sid, gid);
+    const auto t3 = std::chrono::high_resolution_clock::now();
 
     // 5. Timing output
     auto build_us = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
-    auto solve_us = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
+    auto query_us = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
+    auto solve_us = std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count();
     std::cout << "buildBasic() took " << build_us << " ms\n";
+    std::cout << "Query setup and injectQueryPts() took " << query_us << " ms\n";
     std::cout << "shortestPath() took " << solve_us << " ms\n";
     
     std::cout << "Graph has " << vg.numEdges() << " edges\n";

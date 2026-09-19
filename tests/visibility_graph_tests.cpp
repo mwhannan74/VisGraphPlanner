@@ -16,6 +16,8 @@
  *   - convex polygon validation and normalization
  *   - rejection of concave, self-intersecting, and non-finite polygons
  *   - scale-aware behavior for large translated coordinates
+ *   - translation-stable area validation for small polygons
+ *   - rejection of non-finite query coordinates
  *   - operation-area validation and query containment
  *   - operation-area obstacle filtering
  *   - clipping obstacles at an operation-area boundary
@@ -342,6 +344,62 @@ namespace
 
         require(path.size() == 4,
             "scale-aware predicates should route around a large translated obstacle");
+    }
+
+    void smallPolygonAreaIsStableAfterTranslation()
+    {
+        constexpr double offset = 1e7;
+        constexpr double side = 0.1;
+        const Polygon obstacle{
+            Point2(offset, offset),
+            Point2(offset + side, offset),
+            Point2(offset + side, offset + side),
+            Point2(offset, offset + side)
+        };
+        VisibilityGraph graph({ obstacle });
+        graph.buildBasic();
+
+        const Point2 start(offset - side, offset + side / 2.0);
+        const Point2 goal(offset + 2.0 * side, offset + side / 2.0);
+        const auto [startId, goalId] = graph.injectQueryPts(start, goal);
+        const auto path = graph.shortestPath(startId, goalId);
+
+        require(graph.obstacles().size() == 1,
+            "translation should not cause a valid small polygon to be rejected");
+        require(graph.obstacles().front().size() == 4,
+            "translation should preserve the small polygon's four corners");
+        require(path.size() == 4,
+            "the translated small obstacle should still block the direct path");
+    }
+
+    void nonFiniteQueriesAreRejectedWithoutChangingTheGraph()
+    {
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        const double infinity = std::numeric_limits<double>::infinity();
+
+        VisibilityGraph graph({});
+        graph.buildBasic();
+        const auto validIds = graph.injectQueryPts(Point2(1.0, 1.0), Point2(2.0, 2.0));
+        const std::size_t validVertexCount = graph.vertices().size();
+
+        requireThrows<std::invalid_argument>(
+            [&graph, nan] { graph.injectQueryPts(Point2(nan, 1.0), Point2(2.0, 2.0)); },
+            "a non-finite start should be rejected without an operation area");
+        requireThrows<std::invalid_argument>(
+            [&graph, infinity] { graph.injectQueryPts(Point2(1.0, 1.0), Point2(infinity, 2.0)); },
+            "a non-finite goal should be rejected without an operation area");
+        require(graph.vertices().size() == validVertexCount,
+            "a rejected query should preserve the existing graph");
+        require(graph.shortestPath(validIds.first, validIds.second).size() == 2,
+            "a rejected query should preserve the existing valid path");
+
+        VisibilityGraph operationAreaGraph(makeOperationArea(), {});
+        operationAreaGraph.buildBasic();
+        requireThrows<std::invalid_argument>(
+            [&operationAreaGraph, nan] {
+                operationAreaGraph.injectQueryPts(Point2(1.0, 1.0), Point2(2.0, nan));
+            },
+            "a non-finite query should be rejected before operation-area classification");
     }
 
     void operationAreaSupportsContainedQueries()
@@ -788,6 +846,8 @@ namespace
         { "Duplicate and closing vertices are normalized", duplicateAndClosingVerticesAreNormalized },
         { "Invalid polygon geometry is rejected", invalidPolygonGeometryIsRejected },
         { "Large translated coordinates remain usable", largeTranslatedCoordinatesRemainUsable },
+        { "Small polygon area is stable after translation", smallPolygonAreaIsStableAfterTranslation },
+        { "Non-finite queries are rejected", nonFiniteQueriesAreRejectedWithoutChangingTheGraph },
         { "Operation area supports contained queries", operationAreaSupportsContainedQueries },
         { "Original constructor has no operation area", graphWithoutOperationAreaPreservesExistingBehavior },
         { "Operation area validation and winding normalization", operationAreaValidationAndWindingNormalization },
