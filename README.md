@@ -21,11 +21,13 @@ This approach is simple, deterministic, and effective for relatively small stati
 
 ## Assumptions and Limitations
 
-- Obstacles must be represented as convex, simple, counter-clockwise polygons.
+- Obstacles must be represented as convex, simple polygons. Clockwise input is normalized to counter-clockwise order.
 - Each polygon must contain at least three vertices.
+- Repeated closing vertices, consecutive duplicates, and redundant collinear boundary vertices are removed.
+- Non-finite, self-intersecting, degenerate, and concave polygons are rejected.
 - Polygon holes are not supported.
 - Start and goal points must be outside every obstacle and must not lie on an obstacle boundary.
-- When an operation area is supplied, it must be convex, simple, and counter-clockwise, and start and goal must be strictly inside it.
+- When an operation area is supplied, it must be convex and simple, and start and goal must be strictly inside it.
 - Obstacles crossing an operation-area boundary are clipped to the portion inside the area.
 - The obstacle visibility graph is constructed using a naive O(N³) algorithm, where N is the number of obstacle vertices.
 - Each call to `injectQueryPts()` replaces the previous start and goal while reusing the obstacle-only graph.

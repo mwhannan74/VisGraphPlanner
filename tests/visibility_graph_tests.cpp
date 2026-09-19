@@ -13,9 +13,9 @@
  *   - shortest path around a square
  *   - rejection of diagonals through an obstacle
  *   - rejection of crossings through small-scale obstacles
- *   - acceptance of convex counter-clockwise obstacles
- *   - acceptance of collinear vertices on a convex boundary
- *   - rejection of concave and clockwise obstacles
+ *   - convex polygon validation and normalization
+ *   - rejection of concave, self-intersecting, and non-finite polygons
+ *   - scale-aware behavior for large translated coordinates
  *   - operation-area validation and query containment
  *   - operation-area obstacle filtering
  *   - clipping obstacles at an operation-area boundary
@@ -43,6 +43,7 @@
 #include <exception>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -222,7 +223,7 @@ namespace
             "an accepted convex obstacle should retain all of its vertices");
     }
 
-    void convexObstacleMayContainCollinearBoundaryVertex()
+    void convexObstacleRemovesCollinearBoundaryVertex()
     {
         const Polygon rectangleWithExtraVertex{
             Point2(0.0, 0.0),
@@ -235,7 +236,9 @@ namespace
         VisibilityGraph graph({ rectangleWithExtraVertex });
 
         require(graph.obstacles().size() == 1,
-            "collinear boundary vertices should be permitted in a convex obstacle");
+            "a convex obstacle with a collinear boundary vertex should be accepted");
+        require(graph.obstacles().front().size() == 4,
+            "a redundant collinear boundary vertex should be removed");
     }
 
     void concaveObstacleIsRejected()
@@ -253,7 +256,7 @@ namespace
             "a concave obstacle should be rejected");
     }
 
-    void clockwiseObstacleIsRejected()
+    void clockwiseObstacleIsNormalized()
     {
         const Polygon clockwiseSquare{
             Point2(0.0, 0.0),
@@ -262,9 +265,83 @@ namespace
             Point2(4.0, 0.0)
         };
 
+        VisibilityGraph graph({ clockwiseSquare });
+        graph.buildBasic();
+
+        require(graph.obstacles().size() == 1,
+            "a clockwise convex obstacle should be accepted after normalization");
+        require(hasEdge(graph, 0, 1),
+            "a normalized clockwise obstacle should retain its boundary edges");
+    }
+
+    void duplicateAndClosingVerticesAreNormalized()
+    {
+        const Polygon redundantSquare{
+            Point2(0.0, 0.0),
+            Point2(4.0, 0.0),
+            Point2(4.0, 0.0),
+            Point2(4.0, 4.0),
+            Point2(0.0, 4.0),
+            Point2(0.0, 0.0)
+        };
+
+        VisibilityGraph graph({ redundantSquare });
+
+        require(graph.obstacles().front().size() == 4,
+            "consecutive duplicates and a repeated closing vertex should be removed");
+    }
+
+    void invalidPolygonGeometryIsRejected()
+    {
+        const Polygon selfIntersecting{
+            Point2(0.0, 0.0),
+            Point2(4.0, 4.0),
+            Point2(0.0, 4.0),
+            Point2(4.0, 0.0)
+        };
+        const Polygon nonFinite{
+            Point2(0.0, 0.0),
+            Point2(std::numeric_limits<double>::infinity(), 0.0),
+            Point2(0.0, 4.0)
+        };
+        const Polygon undersizedNonFinite{
+            Point2(0.0, 0.0),
+            Point2(std::numeric_limits<double>::quiet_NaN(), 1.0)
+        };
+
         requireThrows<std::invalid_argument>(
-            [&clockwiseSquare] { VisibilityGraph graph({ clockwiseSquare }); },
-            "a clockwise obstacle should be rejected");
+            [&selfIntersecting] { VisibilityGraph graph({ selfIntersecting }); },
+            "a self-intersecting obstacle should be rejected");
+        requireThrows<std::invalid_argument>(
+            [&nonFinite] { VisibilityGraph graph({ nonFinite }); },
+            "an obstacle with non-finite coordinates should be rejected");
+        requireThrows<std::invalid_argument>(
+            [&undersizedNonFinite] { VisibilityGraph graph({ undersizedNonFinite }); },
+            "non-finite obstacle coordinates should not be hidden by undersized-polygon filtering");
+        requireThrows<std::invalid_argument>(
+            [&nonFinite] { VisibilityGraph graph(nonFinite, {}); },
+            "an operation area with non-finite coordinates should be rejected");
+    }
+
+    void largeTranslatedCoordinatesRemainUsable()
+    {
+        constexpr double offset = 1e9;
+        const Polygon obstacle{
+            Point2(offset, offset),
+            Point2(offset + 100.0, offset),
+            Point2(offset + 100.0, offset + 100.0),
+            Point2(offset, offset + 100.0)
+        };
+        VisibilityGraph graph({ obstacle });
+        graph.buildBasic();
+
+        const auto [startId, goalId] = graph.injectQueryPts(
+            Point2(offset - 10.0, offset + 50.0),
+            Point2(offset + 110.0, offset + 50.0));
+        const auto path = graph.shortestPath(startId, goalId);
+
+        require(path.size() == 4,
+            "scale-aware predicates should route around a large translated obstacle");
     }
 
     void operationAreaSupportsContainedQueries()
@@ -297,7 +374,7 @@ namespace
             "requesting a missing operation area should be rejected");
     }
 
-    void invalidOperationAreasAreRejected()
+    void operationAreaValidationAndWindingNormalization()
     {
         const Polygon undersized{
             Point2(0.0, 0.0),
@@ -323,9 +400,9 @@ namespace
         requireThrows<std::invalid_argument>(
             [&concave] { VisibilityGraph graph(concave, {}); },
             "a concave operation area should be rejected");
-        requireThrows<std::invalid_argument>(
-            [&clockwise] { VisibilityGraph graph(clockwise, {}); },
-            "a clockwise operation area should be rejected");
+        VisibilityGraph clockwiseGraph(clockwise, {});
+        require(clockwiseGraph.operationArea().size() == 4,
+            "a clockwise operation area should be accepted after normalization");
     }
 
     void operationAreaRejectsQueriesNotStrictlyInside()
@@ -705,12 +782,15 @@ namespace
         { "Obstacle boundary excludes interior chord", obstacleBoundaryEdgesExcludeInteriorChord },
         { "Small-scale obstacle blocks direct path", smallScaleObstacleBlocksDirectPath },
         { "Convex counter-clockwise obstacle is accepted", convexCounterClockwiseObstacleIsAccepted },
-        { "Convex obstacle permits collinear boundary vertex", convexObstacleMayContainCollinearBoundaryVertex },
+        { "Convex obstacle removes collinear boundary vertex", convexObstacleRemovesCollinearBoundaryVertex },
         { "Concave obstacle is rejected", concaveObstacleIsRejected },
-        { "Clockwise obstacle is rejected", clockwiseObstacleIsRejected },
+        { "Clockwise obstacle is normalized", clockwiseObstacleIsNormalized },
+        { "Duplicate and closing vertices are normalized", duplicateAndClosingVerticesAreNormalized },
+        { "Invalid polygon geometry is rejected", invalidPolygonGeometryIsRejected },
+        { "Large translated coordinates remain usable", largeTranslatedCoordinatesRemainUsable },
         { "Operation area supports contained queries", operationAreaSupportsContainedQueries },
         { "Original constructor has no operation area", graphWithoutOperationAreaPreservesExistingBehavior },
-        { "Invalid operation areas are rejected", invalidOperationAreasAreRejected },
+        { "Operation area validation and winding normalization", operationAreaValidationAndWindingNormalization },
         { "Operation area rejects non-interior queries", operationAreaRejectsQueriesNotStrictlyInside },
         { "Operation area retains contained obstacle", operationAreaRetainsContainedObstacle },
         { "Operation area retains boundary obstacle", operationAreaRetainsObstacleOnBoundary },

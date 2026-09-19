@@ -6,7 +6,7 @@
  *   • Naïve O(N³) obstacle-only build, query-time insertion of S & G.
  *   • Segment-intersection tests plus “same-polygon chord” rejection.
  *   • Optional convex operation area with convex obstacle clipping.
- *   • Convex, counter-clockwise obstacle validation.
+ *   • Convex polygon normalization and validation.
  *   • Polygon-size validation (skips <3-vertex inputs with a warning).
  *
  * Example (see main_demo.cpp):
@@ -28,6 +28,7 @@
 #include <limits>
 #include <queue>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -35,13 +36,12 @@ namespace vg
 {
     // geometry and graph component types
     using Point2 = Eigen::Vector2d;
-    using Polygon = std::vector<Point2>;   // convex, CCW, simple, ≥3 verts
+    using Polygon = std::vector<Point2>;   // convex, simple, ≥3 verts
     struct Segment2 { Point2 a, b; };
     struct Edge { std::size_t to; double cost; };
     struct Vertex { Point2 pos; int poly_id; bool is_query; };
 
-    // Absolute tolerance used by all geometric predicates. Callers should use
-    // a coordinate scale for which this fixed tolerance is appropriate.
+    // Base relative tolerance used by scale-aware geometric predicates.
     inline constexpr double EPS = 1e-12;
 
     /**
@@ -68,15 +68,15 @@ namespace vg
     {
     public:
         /**
-         * @brief Construct from a list of convex, simple CCW polygons.
+         * @brief Construct from a list of convex, simple polygons.
          *
          * Polygons with <3 vertices are skipped with a warning.
          * Obstacle vertices are copied into @c _vertices in input order.
-         * Polygons with at least three vertices must be convex and
-         * counter-clockwise; otherwise construction throws. Collinear points
-         * along the boundary are permitted. The caller is responsible for
-         * supplying finite coordinates and simple polygons. Self-intersections,
-         * duplicate vertices, and overlapping obstacles are not validated.
+         * Valid polygons are normalized to counter-clockwise order. A repeated
+         * closing point, consecutive duplicates, and redundant collinear
+         * boundary points are removed. Non-finite, self-intersecting,
+         * degenerate, and concave polygons are rejected. Overlapping obstacles
+         * are not validated.
          *
          * @param obstacles List of polygons representing obstacles.
          */
@@ -92,21 +92,16 @@ namespace vg
          * Obstacles are clipped to the operation area. Obstacles wholly
          * outside it, or touching it with zero intersection area, are ignored.
          *
-         * @param operationArea Convex, simple, counter-clockwise keep-in area.
+         * @param operationArea Convex, simple keep-in area.
          * @param obstacles List of convex obstacle polygons.
          * @throws std::invalid_argument if the operation area or an obstacle
-         * is not convex and counter-clockwise.
+         * is non-finite, non-simple, degenerate, or concave.
          */
         VisibilityGraph(const Polygon& operationArea,
             const std::vector<Polygon>& obstacles)
-            : _operationArea(operationArea), _hasOperationArea(true)
+            : _hasOperationArea(true)
         {
-            if (_operationArea.size() < 3 ||
-                !isConvexCounterClockwise(_operationArea))
-            {
-                throw std::invalid_argument(
-                    "VisibilityGraph: operation area must be a convex, counter-clockwise polygon");
-            }
+            _operationArea = normalizePolygon(operationArea, "operation area");
 
             initializeObstacles(obstacles);
         }
@@ -184,7 +179,7 @@ namespace vg
             const std::size_t sid = addVertex(S, /*query=*/true, -1);
             connectQueryVertex(sid);
 
-            if ((S - G).squaredNorm() < EPS * EPS)
+            if (pointsNear(S, G))
                 return { sid, sid };
 
             const std::size_t gid = addVertex(G, /*query=*/true, -1);
@@ -292,31 +287,36 @@ namespace vg
 
             for (const auto& poly : obstacles)
             {
+                for (const auto& point : poly)
+                {
+                    if (!std::isfinite(point.x()) || !std::isfinite(point.y()))
+                    {
+                        throw std::invalid_argument(
+                            "VisibilityGraph: obstacle contains a non-finite coordinate");
+                    }
+                }
                 if (poly.size() < 3)
                 {
                     std::cerr << "[VG] Warning: polygon with " << poly.size()
                               << " vertex/vertices ignored (need >=3).\n";
                     continue;
                 }
-                if (!isConvexCounterClockwise(poly))
-                {
-                    throw std::invalid_argument(
-                        "VisibilityGraph: obstacle polygons must be convex and counter-clockwise");
-                }
+                Polygon normalizedObstacle = normalizePolygon(poly, "obstacle");
 
-                _originalObstacles.push_back(poly);
+                _originalObstacles.push_back(normalizedObstacle);
 
                 Polygon effectiveObstacle = _hasOperationArea
-                    ? clipConvexPolygon(poly, _operationArea)
-                    : poly;
+                    ? clipConvexPolygon(normalizedObstacle, _operationArea)
+                    : normalizedObstacle;
                 if (effectiveObstacle.size() < 3 ||
-                    std::abs(signedAreaTwice(effectiveObstacle)) <= EPS)
+                    std::abs(signedAreaTwice(effectiveObstacle)) <=
+                        polygonAreaTolerance(effectiveObstacle))
                 {
                     continue;
                 }
 
                 if (_hasOperationArea &&
-                    !polygonsEquivalent(poly, effectiveObstacle))
+                    !polygonsEquivalent(normalizedObstacle, effectiveObstacle))
                 {
                     _clippedObstacles.push_back(effectiveObstacle);
                 }
@@ -344,6 +344,161 @@ namespace vg
             _obstacleVertexCount = _vertices.size();
         }
 
+        static double pointTolerance(const Point2& lhs, const Point2& rhs)
+        {
+            const double scale = std::max({
+                1.0,
+                std::abs(lhs.x()), std::abs(lhs.y()),
+                std::abs(rhs.x()), std::abs(rhs.y())
+            });
+            return EPS * scale;
+        }
+
+        static bool pointsNear(const Point2& lhs, const Point2& rhs)
+        {
+            const double tolerance = pointTolerance(lhs, rhs);
+            return (lhs - rhs).squaredNorm() <= tolerance * tolerance;
+        }
+
+        static double orientationTolerance(const Point2& a,
+            const Point2& b,
+            const Point2& c)
+        {
+            const double scale = std::max(
+                1.0,
+                (b - a).norm() * (c - a).norm());
+            return EPS * scale;
+        }
+
+        static int orientationSign(const Point2& a,
+            const Point2& b,
+            const Point2& c)
+        {
+            const double orientation = orient2D(a, b, c);
+            const double tolerance = orientationTolerance(a, b, c);
+            if (orientation > tolerance) return 1;
+            if (orientation < -tolerance) return -1;
+            return 0;
+        }
+
+        static double polygonAreaTolerance(const Polygon& poly)
+        {
+            double minX = poly.front().x();
+            double maxX = minX;
+            double minY = poly.front().y();
+            double maxY = minY;
+
+            for (const auto& point : poly)
+            {
+                minX = std::min(minX, point.x());
+                maxX = std::max(maxX, point.x());
+                minY = std::min(minY, point.y());
+                maxY = std::max(maxY, point.y());
+            }
+
+            return EPS * std::max(1.0, (maxX - minX) * (maxY - minY));
+        }
+
+        static bool isSimplePolygon(const Polygon& poly)
+        {
+            const std::size_t n = poly.size();
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                const std::size_t iNext = (i + 1) % n;
+                const Segment2 first{ poly[i], poly[iNext] };
+
+                for (std::size_t j = i + 1; j < n; ++j)
+                {
+                    const std::size_t jNext = (j + 1) % n;
+                    if (i == j || iNext == j || jNext == i)
+                        continue;
+
+                    if (properIntersection(first, { poly[j], poly[jNext] }))
+                        return false;
+                }
+            }
+            return true;
+        }
+
+        static Polygon normalizePolygon(const Polygon& input,
+            const char* polygonRole)
+        {
+            for (const auto& point : input)
+            {
+                if (!std::isfinite(point.x()) || !std::isfinite(point.y()))
+                {
+                    throw std::invalid_argument(
+                        std::string("VisibilityGraph: ") + polygonRole +
+                        " contains a non-finite coordinate");
+                }
+            }
+
+            Polygon normalized;
+            normalized.reserve(input.size());
+            for (const auto& point : input)
+            {
+                if (normalized.empty() || !pointsNear(normalized.back(), point))
+                    normalized.push_back(point);
+            }
+            if (normalized.size() > 1 &&
+                pointsNear(normalized.front(), normalized.back()))
+            {
+                normalized.pop_back();
+            }
+
+            bool removedPoint = true;
+            while (removedPoint && normalized.size() >= 3)
+            {
+                removedPoint = false;
+                for (std::size_t i = 0; i < normalized.size(); ++i)
+                {
+                    const std::size_t previous =
+                        (i + normalized.size() - 1) % normalized.size();
+                    const std::size_t next = (i + 1) % normalized.size();
+                    if (orientationSign(
+                            normalized[previous], normalized[i], normalized[next]) == 0 &&
+                        onSegment(normalized[previous], normalized[next], normalized[i]))
+                    {
+                        normalized.erase(normalized.begin() +
+                            static_cast<std::ptrdiff_t>(i));
+                        removedPoint = true;
+                        break;
+                    }
+                }
+            }
+
+            if (normalized.size() < 3)
+            {
+                throw std::invalid_argument(
+                    std::string("VisibilityGraph: ") + polygonRole +
+                    " has fewer than three distinct non-collinear vertices");
+            }
+            if (!isSimplePolygon(normalized))
+            {
+                throw std::invalid_argument(
+                    std::string("VisibilityGraph: ") + polygonRole +
+                    " must be simple and non-self-intersecting");
+            }
+
+            const double area = signedAreaTwice(normalized);
+            if (std::abs(area) <= polygonAreaTolerance(normalized))
+            {
+                throw std::invalid_argument(
+                    std::string("VisibilityGraph: ") + polygonRole +
+                    " must have nonzero area");
+            }
+            if (area < 0.0)
+                std::reverse(normalized.begin(), normalized.end());
+
+            if (!isConvexCounterClockwise(normalized))
+            {
+                throw std::invalid_argument(
+                    std::string("VisibilityGraph: ") + polygonRole +
+                    " must be convex");
+            }
+            return normalized;
+        }
+
         static double signedAreaTwice(const Polygon& poly)
         {
             double area = 0.0;
@@ -363,7 +518,7 @@ namespace vg
 
             for (std::size_t i = 0; i < lhs.size(); ++i)
             {
-                if ((lhs[i] - rhs[i]).squaredNorm() >= EPS * EPS)
+                if (!pointsNear(lhs[i], rhs[i]))
                     return false;
             }
             return true;
@@ -371,8 +526,7 @@ namespace vg
 
         static void appendUniquePoint(Polygon& poly, const Point2& point)
         {
-            if (poly.empty() ||
-                (poly.back() - point).squaredNorm() >= EPS * EPS)
+            if (poly.empty() || !pointsNear(poly.back(), point))
             {
                 poly.push_back(point);
             }
@@ -380,8 +534,7 @@ namespace vg
 
         static Polygon removeDuplicateClosingPoint(Polygon poly)
         {
-            if (poly.size() > 1 &&
-                (poly.front() - poly.back()).squaredNorm() < EPS * EPS)
+            if (poly.size() > 1 && pointsNear(poly.front(), poly.back()))
             {
                 poly.pop_back();
             }
@@ -426,13 +579,13 @@ namespace vg
                 output.reserve(input.size() + 1);
 
                 Point2 start = input.back();
-                bool startInside = orient2D(
-                    boundaryStart, boundaryEnd, start) >= -EPS;
+                bool startInside = orientationSign(
+                    boundaryStart, boundaryEnd, start) >= 0;
 
                 for (const auto& end : input)
                 {
-                    const bool endInside = orient2D(
-                        boundaryStart, boundaryEnd, end) >= -EPS;
+                    const bool endInside = orientationSign(
+                        boundaryStart, boundaryEnd, end) >= 0;
 
                     if (endInside)
                     {
@@ -464,8 +617,8 @@ namespace vg
          *
          * Collinear consecutive vertices are allowed, but the polygon must
          * contain at least one counter-clockwise turn and no clockwise turns.
-         * Simplicity and duplicate-vertex validation remain caller
-         * responsibilities.
+         * The polygon is normalized and checked for simplicity before this
+         * function is called.
          */
         static bool isConvexCounterClockwise(const Polygon& poly)
         {
@@ -474,14 +627,14 @@ namespace vg
 
             for (std::size_t i = 0; i < n; ++i)
             {
-                const double turn = orient2D(
+                const int turn = orientationSign(
                     poly[i],
                     poly[(i + 1) % n],
                     poly[(i + 2) % n]);
 
-                if (turn < -EPS)
+                if (turn < 0)
                     return false;
-                if (turn > EPS)
+                if (turn > 0)
                     hasCounterClockwiseTurn = true;
             }
 
@@ -562,7 +715,7 @@ namespace vg
             assert(i < _vertices.size() && j < _vertices.size());
 
             const Segment2 seg{ _vertices[i].pos, _vertices[j].pos };
-            if ((seg.a - seg.b).squaredNorm() < EPS * EPS) return false;
+            if (pointsNear(seg.a, seg.b)) return false;
 
             // Skip obstacle edges incident to a candidate endpoint, using EPS
             // rather than exact floating-point equality.
@@ -573,10 +726,10 @@ namespace vg
                 {
                     const std::size_t k2 = (k + 1) % m;
 
-                    if (((poly[k] - seg.a).squaredNorm() < EPS * EPS) ||
-                        ((poly[k] - seg.b).squaredNorm() < EPS * EPS) ||
-                        ((poly[k2] - seg.a).squaredNorm() < EPS * EPS) ||
-                        ((poly[k2] - seg.b).squaredNorm() < EPS * EPS))
+                    if (pointsNear(poly[k], seg.a) ||
+                        pointsNear(poly[k], seg.b) ||
+                        pointsNear(poly[k2], seg.a) ||
+                        pointsNear(poly[k2], seg.b))
                         continue;
 
                     if (properIntersection(seg, { poly[k], poly[k2] }))
@@ -645,14 +798,15 @@ namespace vg
          */
         static bool onSegment(const Point2& a, const Point2& b, const Point2& p)
         {
-            return (p - a).dot(b - p) >= 0.0;
+            const double tolerance = EPS * std::max(1.0, (b - a).squaredNorm());
+            return (p - a).dot(b - p) >= -tolerance;
         }
 
         /**
          * @brief Tests whether two 2D line segments intersect or touch.
          *
          * Handles general and degenerate (collinear) cases using the shared
-         * absolute EPS tolerance. Applies orientation tests to detect
+         * scale-aware tolerance. Applies orientation tests to detect
          * intersection, including endpoints classified as lying on the other
          * segment.
          *
@@ -665,8 +819,8 @@ namespace vg
          */        
         static bool properIntersection(const Segment2& s1, const Segment2& s2)
         {
-            if ((s1.a - s1.b).squaredNorm() < EPS * EPS) return false;
-            if ((s2.a - s2.b).squaredNorm() < EPS * EPS) return false;
+            if (pointsNear(s1.a, s1.b)) return false;
+            if (pointsNear(s2.a, s2.b)) return false;
 
             // Reject disjoint axis-aligned bounding boxes before orientation tests.
             const double min1x = std::min(s1.a.x(), s1.b.x()), max1x = std::max(s1.a.x(), s1.b.x());
@@ -676,22 +830,16 @@ namespace vg
             const double min2y = std::min(s2.a.y(), s2.b.y()), max2y = std::max(s2.a.y(), s2.b.y());
             if (max1y < min2y || max2y < min1y) return false;
 
-            const double o1 = orient2D(s1.a, s1.b, s2.a);
-            const double o2 = orient2D(s1.a, s1.b, s2.b);
-            const double o3 = orient2D(s2.a, s2.b, s1.a);
-            const double o4 = orient2D(s2.a, s2.b, s1.b);
+            const int o1 = orientationSign(s1.a, s1.b, s2.a);
+            const int o2 = orientationSign(s1.a, s1.b, s2.b);
+            const int o3 = orientationSign(s2.a, s2.b, s1.a);
+            const int o4 = orientationSign(s2.a, s2.b, s1.b);
 
-            const auto haveOppositeSigns = [](double lhs, double rhs)
-            {
-                return (lhs > EPS && rhs < -EPS) ||
-                       (lhs < -EPS && rhs > EPS);
-            };
-
-            if (haveOppositeSigns(o1, o2) && haveOppositeSigns(o3, o4)) return true;
-            if (std::abs(o1) < EPS && onSegment(s1.a, s1.b, s2.a)) return true;
-            if (std::abs(o2) < EPS && onSegment(s1.a, s1.b, s2.b)) return true;
-            if (std::abs(o3) < EPS && onSegment(s2.a, s2.b, s1.a)) return true;
-            if (std::abs(o4) < EPS && onSegment(s2.a, s2.b, s1.b)) return true;
+            if (o1 * o2 < 0 && o3 * o4 < 0) return true;
+            if (o1 == 0 && onSegment(s1.a, s1.b, s2.a)) return true;
+            if (o2 == 0 && onSegment(s1.a, s1.b, s2.b)) return true;
+            if (o3 == 0 && onSegment(s2.a, s2.b, s1.a)) return true;
+            if (o4 == 0 && onSegment(s2.a, s2.b, s1.b)) return true;
 
             return false;
         }
@@ -700,7 +848,7 @@ namespace vg
          * @brief Classifies a point with respect to a polygon (even-odd rule).
          *
          * Implements the crossing-number test. If the point lies on an edge
-         * within the absolute EPS tolerance, it is reported as
+         * within the scale-aware tolerance, it is reported as
          * PointLocation::OnEdge; otherwise the usual inside/outside result is
          * returned.
          *
@@ -722,13 +870,12 @@ namespace vg
                 const Point2& b = poly[i];
 
                 // Boundary test (collinear and within segment)
-                const double o = orient2D(a, b, p);
-                if (std::abs(o) < EPS && onSegment(a, b, p))
+                if (orientationSign(a, b, p) == 0 && onSegment(a, b, p))
                     return PointLocation::OnEdge;
 
                 // Ray-casting toggle
                 const bool hit = ((a.y() > p.y()) != (b.y() > p.y())) &&
-                                 (p.x() < (b.x() - a.x()) * (p.y() - a.y()) / (b.y() - a.y() + EPS) + a.x());
+                                 (p.x() < (b.x() - a.x()) * (p.y() - a.y()) / (b.y() - a.y()) + a.x());
                 if (hit) inside = !inside;
             }
             return inside ? PointLocation::Inside : PointLocation::Outside;
