@@ -42,6 +42,8 @@ From the build directory on Windows:
 Release\main_demo.exe
 ```
 
+![Visibility graph demo showing the planned path through polygonal obstacles](images/visibility_graph_demo.png)
+
 For single-configuration generators or other platforms, the executable location may differ depending on the selected CMake generator and build configuration.
 
 ## Project Scope
