@@ -21,6 +21,7 @@
 #include <Eigen/Core>
 #include <cmath>
 #include <cstddef>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <queue>
@@ -54,8 +55,8 @@ namespace vg
      * @brief Obstacle visibility graph supporting query-time terminal insertion.
      *
      * Intended lifecycle: construct, call buildBasic(), inject a start/goal
-     * pair, then call shortestPath(). Query vertices are retained, so repeated
-     * calls to injectQueryPts() accumulate vertices and edges.
+     * pair, then call shortestPath(). Each call to injectQueryPts() replaces
+     * the previous query pair while preserving the obstacle-only graph.
      *
      * @note The class provides no internal synchronization. Concurrent
      * read-only access is safe only while no thread is calling buildBasic() or
@@ -99,22 +100,20 @@ namespace vg
             for (std::size_t pid = 0; pid < _obstacles.size(); ++pid)
                 for (const auto& pt : _obstacles[pid])
                     addVertex(pt, /*query=*/false, static_cast<int>(pid));
+
+            _obstacleVertexCount = _vertices.size();
         }
 
         /**
          * @brief Build the obstacle-only visibility graph (O(N³)).
          *
          * Recomputes _adjacency from scratch using naive all-pairs
-         * visibility checks.
-         *
-         * @warning Call before injectQueryPts(). This method clears and
-         * rebuilds adjacency lists, but it does not remove previously injected
-         * query vertices; if called later, those vertices participate in the
-         * rebuilt graph.
+         * visibility checks. Previously injected query vertices are removed.
          */
         void buildBasic()
         {
-            const std::size_t n = _vertices.size();
+            _vertices.resize(_obstacleVertexCount);
+            const std::size_t n = _obstacleVertexCount;
             _adjacency.assign(n, {});
             for (auto& nbrs : _adjacency)
                 nbrs.reserve(6);
@@ -124,6 +123,9 @@ namespace vg
                 for (std::size_t j = i + 1; j < n; ++j)
                     if (visible(i, j))
                         addEdge(i, j);
+
+            _obstacleAdjacency = _adjacency;
+            _isBuilt = true;
         }
 
 
@@ -135,33 +137,41 @@ namespace vg
          * @return Pair of vertex indices (S,G) within the graph.
          *
          * @pre buildBasic() has been called for the obstacle graph.
-         * @throws std::runtime_error if S or G is strictly inside an obstacle.
-         * Points on an obstacle boundary are accepted.
+         * @throws std::logic_error if buildBasic() has not been called.
+         * @throws std::runtime_error if S or G is inside an obstacle or on its
+         * boundary.
          *
-         * The two query vertices are appended permanently. Repeated calls
-         * accumulate query vertices, and new queries may connect to query
-         * vertices inserted by earlier calls.
+         * Any previous query vertices are removed before the new query is
+         * inserted. If S and G are coincident within EPS, one query vertex is
+         * inserted and its index is returned for both endpoints.
          *
          * Complexity O(N²) for each inserted point.
          */
         std::pair<std::size_t, std::size_t>
         injectQueryPts(const Point2& S, const Point2& G)
         {
-            // Reject query points strictly inside an obstacle; boundary points
-            // are intentionally accepted.
+            if (!_isBuilt)
+                throw std::logic_error("injectQueryPts: buildBasic() must be called first");
+
+            // Reject points inside or on an obstacle boundary.
             for (const auto& poly : _obstacles)
             {
-                if (pointInPolygon(S, poly) == PointLocation::Inside)
-                    throw std::runtime_error("injectQueryPts: Start inside obstacle");
-                if (pointInPolygon(G, poly) == PointLocation::Inside)
-                    throw std::runtime_error("injectQueryPts: Goal inside obstacle");
+                if (pointInPolygon(S, poly) != PointLocation::Outside)
+                    throw std::runtime_error("injectQueryPts: Start inside or on obstacle");
+                if (pointInPolygon(G, poly) != PointLocation::Outside)
+                    throw std::runtime_error("injectQueryPts: Goal inside or on obstacle");
             }
 
-            const std::size_t sid = addVertex(S, /*query=*/true, -1);
-            const std::size_t gid = addVertex(G, /*query=*/true, -1);
+            restoreObstacleGraph();
 
-            connectQueryVertex(sid);   // connect S → obstacles
-            connectQueryVertex(gid);   // connect G → obstacles
+            const std::size_t sid = addVertex(S, /*query=*/true, -1);
+            connectQueryVertex(sid);
+
+            if ((S - G).squaredNorm() < EPS * EPS)
+                return { sid, sid };
+
+            const std::size_t gid = addVertex(G, /*query=*/true, -1);
+            connectQueryVertex(gid);
             return { sid, gid };
         }
 
@@ -242,9 +252,20 @@ namespace vg
 
         // Data
         std::vector<Polygon>              _obstacles; // input polygon for each obstacle
-        std::vector<Vertex>               _vertices;  // vertices from each obstalce
+        std::vector<Vertex>               _vertices;  // vertices from each obstacle
         std::vector<std::vector<Edge>>    _adjacency; //  for each vertex, the list of adjacent edges (i.e. the vertices directly visible/connected to it).
+        std::vector<std::vector<Edge>>    _obstacleAdjacency;
+        std::size_t                       _obstacleVertexCount = 0;
+        bool                              _isBuilt = false;
 
+        /**
+         * @brief Removes query vertices and restores cached obstacle-only edges.
+         */
+        void restoreObstacleGraph()
+        {
+            _vertices.resize(_obstacleVertexCount);
+            _adjacency = _obstacleAdjacency;
+        }
 
         /**
          * @brief Adds a new vertex to the graph.
@@ -334,20 +355,16 @@ namespace vg
         }
 
         /**
-         * @brief Connects a query vertex to visible vertices allowed by insertion order.
+         * @brief Connects a newly appended query vertex to visible earlier vertices.
          *
-         * injectQueryPts() appends S followed by G, then connects S before G.
-         * The scan excludes the final appended vertex: S is therefore tested
-         * against obstacle vertices, while G is tested against obstacles and S.
-         * Query vertices from earlier injectQueryPts() calls are not filtered
-         * and may also be connected when visible.
+         * S is connected to obstacle vertices. G is then connected to obstacle
+         * vertices and S, which permits a direct S-G edge when unobstructed.
          *
          * @param q Index of the query vertex to connect.
          */
         void connectQueryVertex(std::size_t q)
         {
-            const std::size_t N = _vertices.size();
-            for (std::size_t i = 0; i < N - 1; ++i)
+            for (std::size_t i = 0; i < q; ++i)
                 if (visible(i, q))
                     addEdge(i, q);
         }

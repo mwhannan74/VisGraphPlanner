@@ -184,8 +184,7 @@ namespace
         require(!warning.str().empty(), "ignored polygon should produce a warning");
     }
 
-    // These remaining cases describe desired behavior for known defects and
-    // currently fail until the corresponding planner behavior is fixed.
+    // Less common lifecycle and boundary cases.
 
     void identicalStartAndGoalReturnsZeroLengthPath()
     {

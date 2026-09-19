@@ -17,9 +17,9 @@ This approach is simple, deterministic, and effective for relatively small stati
 - Obstacles must be represented as simple, counter-clockwise polygons.
 - Each polygon must contain at least three vertices.
 - Polygon holes are not supported.
-- Start and goal points must not be strictly inside an obstacle.
+- Start and goal points must be outside every obstacle and must not lie on an obstacle boundary.
 - The obstacle visibility graph is constructed using a naive O(N³) algorithm, where N is the number of obstacle vertices.
-- `injectQueryPts()` appends query vertices to the graph. The current API does not provide a method for removing or resetting previously injected query points.
+- Each call to `injectQueryPts()` replaces the previous start and goal while reusing the obstacle-only graph.
 
 ## Run the Demo
 
@@ -113,7 +113,7 @@ From the `build` directory, use:
 .\Release\visgraph_tests.exe
 ```
 
-The executable runs every test in order and prints its elapsed time and `PASS` or `FAIL` status. Failed tests also print the reason. Several edge cases currently fail because they describe planner defects that have not been fixed yet.
+The executable runs every test in order and prints its elapsed time and `PASS` or `FAIL` status. Failed tests also print the reason.
 
 CTest can also run the same executable:
 
