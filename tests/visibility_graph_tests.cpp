@@ -31,6 +31,7 @@
  *   - repeated query insertion
  *   - rebuilding after query insertion
  *   - querying before buildBasic()
+ *   - shortest-path vertex index validation
  *
  * Each test is an ordinary function. Add a new function, use require() to
  * check its result, then add its name and function to TEST_CASES. main() runs
@@ -836,6 +837,26 @@ namespace
             "injectQueryPts should reject a query before buildBasic is called");
     }
 
+    void shortestPathRejectsInvalidVertexIndices()
+    {
+        VisibilityGraph graph({});
+        graph.buildBasic();
+        const auto [startId, goalId] = graph.injectQueryPts(
+            Point2(0.0, 0.0), Point2(1.0, 1.0));
+        const std::size_t invalidId = graph.vertices().size();
+
+        requireThrows<std::out_of_range>(
+            [&graph, invalidId, goalId] {
+                static_cast<void>(graph.shortestPath(invalidId, goalId));
+            },
+            "shortestPath should reject an invalid source index");
+        requireThrows<std::out_of_range>(
+            [&graph, startId, invalidId] {
+                static_cast<void>(graph.shortestPath(startId, invalidId));
+            },
+            "shortestPath should reject an invalid goal index");
+    }
+
     struct TestCase
     {
         const char* name;
@@ -877,7 +898,8 @@ namespace
         { "Query on vertex is rejected", queryOnVertexIsRejected },
         { "Repeated queries replace old queries", repeatedQueriesDoNotAccumulateVertices },
         { "Rebuild restores obstacle-only graph", rebuildRestoresObstacleOnlyGraph },
-        { "Query before build is rejected", queryBeforeBuildIsRejected }
+        { "Query before build is rejected", queryBeforeBuildIsRejected },
+        { "Shortest path rejects invalid indices", shortestPathRejectsInvalidVertexIndices }
     };
 }
 

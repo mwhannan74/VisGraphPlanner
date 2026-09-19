@@ -7,7 +7,7 @@
  *   • Segment-intersection tests plus “same-polygon chord” rejection.
  *   • Optional convex operation area with convex obstacle clipping.
  *   • Convex polygon normalization and validation.
- *   • Polygon-size validation (skips <3-vertex inputs with a warning).
+ *   • Polygon-size validation (skips <3-vertex obstacles with a warning).
  *
  * Example (see main_demo.cpp):
  *   vg::VisibilityGraph vg(obstacles);
@@ -34,9 +34,9 @@
 
 namespace vg
 {
-    // geometry and graph component types
+    // Geometry and graph component types.
     using Point2 = Eigen::Vector2d;
-    using Polygon = std::vector<Point2>;   // convex, simple, ≥3 verts
+    using Polygon = std::vector<Point2>;   // Ordered vertices; validated by VisibilityGraph.
     struct Segment2 { Point2 a, b; };
     struct Edge { std::size_t to; double cost; };
     struct Vertex { Point2 pos; int poly_id; bool is_query; };
@@ -70,16 +70,18 @@ namespace vg
         /**
          * @brief Construct from a list of convex, simple polygons.
          *
-         * Polygons with <3 vertices are skipped with a warning.
+         * Finite obstacle polygons with <3 vertices are skipped with a warning.
          * Valid polygons are normalized before their effective vertices are
          * added to the graph. Polygons are converted to counter-clockwise
-         * order. A repeated
-         * closing point, consecutive duplicates, and redundant collinear
-         * boundary points are removed. Non-finite, self-intersecting,
-         * degenerate, and concave polygons are rejected. Overlapping obstacles
-         * are not validated.
+         * order. A repeated closing point, consecutive duplicates, and
+         * redundant collinear boundary points are removed. Non-finite,
+         * self-intersecting, degenerate, and concave polygons are rejected.
+         * Overlapping obstacles are not validated.
          *
          * @param obstacles List of polygons representing obstacles.
+         * @throws std::invalid_argument if an obstacle contains non-finite
+         * coordinates or, after the undersized-input filter, is
+         * self-intersecting, degenerate, or concave.
          */
         explicit VisibilityGraph(const std::vector<Polygon>& obstacles)
         {
@@ -92,11 +94,13 @@ namespace vg
          * Start and goal queries must be strictly inside @p operationArea.
          * Obstacles are clipped to the operation area. Obstacles wholly
          * outside it, or touching it with zero intersection area, are ignored.
+         * Overlapping obstacles are not validated.
          *
          * @param operationArea Convex, simple keep-in area.
          * @param obstacles List of convex obstacle polygons.
-         * @throws std::invalid_argument if the operation area or an obstacle
-         * is non-finite, non-simple, degenerate, or concave.
+         * @throws std::invalid_argument if the operation area is non-finite,
+         * non-simple, degenerate, or concave, or if an obstacle fails the same
+         * validation after the undersized-input filter.
          */
         VisibilityGraph(const Polygon& operationArea,
             const std::vector<Polygon>& obstacles)
@@ -207,10 +211,9 @@ namespace vg
          * @return Sequence of points from @p s to @p g (inclusive); empty if
          *         no path exists.
          *
-         * @pre s and g are valid vertex indices. Debug builds assert this
-         * condition; release builds do not perform a runtime bounds check.
          * @pre The relevant graph edges have been created by buildBasic() and,
          * for query vertices, injectQueryPts().
+         * @throws std::out_of_range if s or g is not a valid vertex index.
          *
          * Complexity O(E log V) with binary heap.
          */
@@ -218,7 +221,9 @@ namespace vg
         std::vector<Point2> shortestPath(std::size_t s,
             std::size_t g) const
         {
-            assert(s < _vertices.size() && g < _vertices.size());
+            if (s >= _vertices.size() || g >= _vertices.size())
+                throw std::out_of_range(
+                    "shortestPath: source and goal must be valid vertex indices");
 
             const double INF = std::numeric_limits<double>::infinity();
             const std::size_t N = _vertices.size();
@@ -307,7 +312,7 @@ namespace vg
             {
                 for (const auto& point : poly)
                 {
-                    if (!std::isfinite(point.x()) || !std::isfinite(point.y()))
+                    if (!isFinite(point))
                     {
                         throw std::invalid_argument(
                             "VisibilityGraph: obstacle contains a non-finite coordinate");
@@ -334,7 +339,7 @@ namespace vg
                 }
 
                 if (_hasOperationArea &&
-                    !polygonsEquivalent(normalizedObstacle, effectiveObstacle))
+                    !haveSameOrderedVertices(normalizedObstacle, effectiveObstacle))
                 {
                     _clippedObstacles.push_back(effectiveObstacle);
                 }
@@ -532,7 +537,7 @@ namespace vg
             return area;
         }
 
-        static bool polygonsEquivalent(const Polygon& lhs, const Polygon& rhs)
+        static bool haveSameOrderedVertices(const Polygon& lhs, const Polygon& rhs)
         {
             if (lhs.size() != rhs.size())
                 return false;
@@ -667,10 +672,10 @@ namespace vg
         bool                              _hasOperationArea = false;
         std::vector<Polygon>              _originalObstacles;
         std::vector<Polygon>              _clippedObstacles;
-        std::vector<Polygon>              _obstacles; // effective obstacle polygons
-        std::vector<Vertex>               _vertices;  // vertices from each obstacle
-        std::vector<std::vector<Edge>>    _adjacency; //  for each vertex, the list of adjacent edges (i.e. the vertices directly visible/connected to it).
-        std::vector<std::vector<Edge>>    _obstacleAdjacency;
+        std::vector<Polygon>              _obstacles; // Effective obstacle geometry.
+        std::vector<Vertex>               _vertices;  // Obstacle vertices plus active queries.
+        std::vector<std::vector<Edge>>    _adjacency; // Neighbors for each active vertex.
+        std::vector<std::vector<Edge>>    _obstacleAdjacency; // Cached obstacle-only graph.
         std::size_t                       _obstacleVertexCount = 0;
         bool                              _isBuilt = false;
 
@@ -826,10 +831,10 @@ namespace vg
         /**
          * @brief Tests whether two 2D line segments intersect or touch.
          *
-         * Handles general and degenerate (collinear) cases using the shared
-         * scale-aware tolerance. Applies orientation tests to detect
-         * intersection, including endpoints classified as lying on the other
-         * segment.
+         * Handles general and collinear nonzero-length segments using the
+         * shared scale-aware tolerance. Zero-length segments return false.
+         * Applies orientation tests to detect intersection, including endpoints
+         * classified as lying on the other segment.
          *
          * @param s1 First segment.
          * @param s2 Second segment.
