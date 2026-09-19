@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(VisGraphPlanner LANGUAGES CXX)
 
+include(CTest)
+
 # ---------- C++ settings -----------------------------------------------------
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -51,5 +53,22 @@ if(VISGRAPH_BUILD_DEMO)
     target_link_libraries(main_demo
         PRIVATE
             VisGraphPlanner::visgraph_visualization
+    )
+endif()
+
+# ---------- Tests -------------------------------------------------------------
+if(BUILD_TESTING)
+    add_executable(visgraph_tests
+        tests/visibility_graph_tests.cpp
+    )
+
+    target_link_libraries(visgraph_tests
+        PRIVATE
+            VisGraphPlanner::visgraph
+    )
+
+    add_test(
+        NAME visgraph_tests
+        COMMAND visgraph_tests
     )
 endif()

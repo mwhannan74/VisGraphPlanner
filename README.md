@@ -99,6 +99,30 @@ cmake --build build --config Release
 
 MatPlotOpenCV enables its own demo and documentation targets by default. Add `-DMATPLOTOPENCV_BUILD_DEMO=OFF -DMATPLOTOPENCV_BUILD_DOCS=OFF` to the configure command if you do not want to build them.
 
+## Tests
+
+Tests are built by default. From the repository root, run every test with:
+
+```powershell
+.\build\Release\visgraph_tests.exe
+```
+
+From the `build` directory, use:
+
+```powershell
+.\Release\visgraph_tests.exe
+```
+
+The executable runs every test in order and prints its elapsed time and `PASS` or `FAIL` status. Failed tests also print the reason. Several edge cases currently fail because they describe planner defects that have not been fixed yet.
+
+CTest can also run the same executable:
+
+```bash
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Use `-DBUILD_TESTING=OFF` when configuring to omit the test executable.
+
 ## Targets
 
 The project provides the following CMake targets:
