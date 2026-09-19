@@ -4,12 +4,12 @@
  * ────
  * Core features
  *   • Naïve O(N³) obstacle-only build, query-time insertion of S & G.
- *   • Proper intersection tests plus “same-polygon chord” rejection.
+ *   • Segment-intersection tests plus “same-polygon chord” rejection.
  *   • Polygon-size validation (skips <3-vertex inputs with a warning).
  *
  * Example (see main_demo.cpp):
  *   vg::VisibilityGraph vg(obstacles);
- *   vg.build();
+ *   vg.buildBasic();
  *   auto ids  = vg.injectQueryPts(S,G);
  *   auto path = vg.shortestPath(ids.first, ids.second);
  * ────
@@ -37,7 +37,8 @@ namespace vg
     struct Edge { std::size_t to; double cost; };
     struct Vertex { Point2 pos; int poly_id; bool is_query; };
 
-    // Unified numeric tolerance for all geometric predicates
+    // Absolute tolerance used by all geometric predicates. Callers should use
+    // a coordinate scale for which this fixed tolerance is appropriate.
     inline constexpr double EPS = 1e-12;
 
     /**
@@ -52,7 +53,13 @@ namespace vg
      * @class VisibilityGraph
      * @brief Obstacle visibility graph supporting query-time terminal insertion.
      *
-     * @note All public methods are thread-safe except injectQueryPts().
+     * Intended lifecycle: construct, call buildBasic(), inject a start/goal
+     * pair, then call shortestPath(). Query vertices are retained, so repeated
+     * calls to injectQueryPts() accumulate vertices and edges.
+     *
+     * @note The class provides no internal synchronization. Concurrent
+     * read-only access is safe only while no thread is calling buildBasic() or
+     * injectQueryPts().
      */
     class VisibilityGraph
     {
@@ -61,7 +68,10 @@ namespace vg
          * @brief Construct from list of simple CCW polygons.
          *
          * Polygons with <3 vertices are skipped with a warning.
-         * Obstacle vertices are copied into @c vertices_ in input order.
+         * Obstacle vertices are copied into @c _vertices in input order.
+         * The caller is responsible for supplying finite coordinates and
+         * valid, simple, counter-clockwise polygons. Self-intersections,
+         * duplicate vertices, and overlapping obstacles are not validated.
          *
          * @param obstacles List of polygons representing obstacles.
          */
@@ -97,8 +107,10 @@ namespace vg
          * Recomputes _adjacency from scratch using naive all-pairs
          * visibility checks.
          *
-         * @warning Call only once after construction; subsequent calls will
-         *          override any previously injected query vertices.
+         * @warning Call before injectQueryPts(). This method clears and
+         * rebuilds adjacency lists, but it does not remove previously injected
+         * query vertices; if called later, those vertices participate in the
+         * rebuilt graph.
          */
         void buildBasic()
         {
@@ -122,12 +134,21 @@ namespace vg
          * @param G Goal position.
          * @return Pair of vertex indices (S,G) within the graph.
          *
+         * @pre buildBasic() has been called for the obstacle graph.
+         * @throws std::runtime_error if S or G is strictly inside an obstacle.
+         * Points on an obstacle boundary are accepted.
+         *
+         * The two query vertices are appended permanently. Repeated calls
+         * accumulate query vertices, and new queries may connect to query
+         * vertices inserted by earlier calls.
+         *
          * Complexity O(N²) for each inserted point.
          */
         std::pair<std::size_t, std::size_t>
         injectQueryPts(const Point2& S, const Point2& G)
         {
-            // 4. Validate start/goal aren’t inside any obstacle
+            // Reject query points strictly inside an obstacle; boundary points
+            // are intentionally accepted.
             for (const auto& poly : _obstacles)
             {
                 if (pointInPolygon(S, poly) == PointLocation::Inside)
@@ -151,6 +172,11 @@ namespace vg
          * @param g Target vertex index.
          * @return Sequence of points from @p s to @p g (inclusive); empty if
          *         no path exists.
+         *
+         * @pre s and g are valid vertex indices. Debug builds assert this
+         * condition; release builds do not perform a runtime bounds check.
+         * @pre The relevant graph edges have been created by buildBasic() and,
+         * for query vertices, injectQueryPts().
          *
          * Complexity O(E log V) with binary heap.
          */
@@ -260,7 +286,8 @@ namespace vg
          * @brief Determines if two vertices are mutually visible.
          *
          * Checks whether the line segment between two vertices intersects any obstacle edge.
-         * Skips segments that overlap with existing polygon edges.
+         * Obstacle edges incident to either candidate endpoint are skipped so
+         * a path may meet or follow an obstacle at one of its vertices.
          * Also rejects chords lying entirely within a polygon.
          *
          * @param i Index of the first vertex.
@@ -274,7 +301,8 @@ namespace vg
             const Segment2 seg{ _vertices[i].pos, _vertices[j].pos };
             if ((seg.a - seg.b).squaredNorm() < EPS * EPS) return false;
 
-            // 2. Floating‐point vertex equality replaced by ε‐test
+            // Skip obstacle edges incident to a candidate endpoint, using EPS
+            // rather than exact floating-point equality.
             for (const auto& poly : _obstacles)
             {
                 const std::size_t m = poly.size();
@@ -306,10 +334,13 @@ namespace vg
         }
 
         /**
-         * @brief Connects a query vertex to all visible non-query vertices.
+         * @brief Connects a query vertex to visible vertices allowed by insertion order.
          *
-         * Iterates over all previously added vertices (excluding other query points),
-         * and adds an edge between the query vertex and each visible vertex.
+         * injectQueryPts() appends S followed by G, then connects S before G.
+         * The scan excludes the final appended vertex: S is therefore tested
+         * against obstacle vertices, while G is tested against obstacles and S.
+         * Query vertices from earlier injectQueryPts() calls are not filtered
+         * and may also be connected when visible.
          *
          * @param q Index of the query vertex to connect.
          */
@@ -361,9 +392,10 @@ namespace vg
         /**
          * @brief Tests whether two 2D line segments intersect or touch.
          *
-         * Handles general and degenerate (collinear) cases robustly.
-         * Applies orientation tests to detect intersection, including
-         * when endpoints lie exactly on the other segment.
+         * Handles general and degenerate (collinear) cases using the shared
+         * absolute EPS tolerance. Applies orientation tests to detect
+         * intersection, including endpoints classified as lying on the other
+         * segment.
          *
          * @param s1 First segment.
          * @param s2 Second segment.
@@ -377,7 +409,7 @@ namespace vg
             if ((s1.a - s1.b).squaredNorm() < EPS * EPS) return false;
             if ((s2.a - s2.b).squaredNorm() < EPS * EPS) return false;
 
-            // 5. Axis-aligned bounding-box rejection
+            // Reject disjoint axis-aligned bounding boxes before orientation tests.
             const double min1x = std::min(s1.a.x(), s1.b.x()), max1x = std::max(s1.a.x(), s1.b.x());
             const double min2x = std::min(s2.a.x(), s2.b.x()), max2x = std::max(s2.a.x(), s2.b.x());
             if (max1x < min2x || max2x < min1x) return false;
@@ -402,9 +434,10 @@ namespace vg
         /**
          * @brief Classifies a point with respect to a polygon (even-odd rule).
          *
-         * Implements the crossing-number test.  If the point lies exactly on any edge,
-         * it is reported as PointLocation::OnEdge; otherwise the usual inside / outside
-         * result is returned.
+         * Implements the crossing-number test. If the point lies on an edge
+         * within the absolute EPS tolerance, it is reported as
+         * PointLocation::OnEdge; otherwise the usual inside/outside result is
+         * returned.
          *
          * @param p    Query point.
          * @param poly Simple, non-self-intersecting polygon in CCW order.
