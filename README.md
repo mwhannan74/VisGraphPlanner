@@ -76,6 +76,14 @@ From the repository root on Windows with a multi-configuration generator such as
 .\build\Release\main_demo.exe
 ```
 
+**Terminal Output:**
+```
+buildBasic() took 1 ms
+shortestPath() took 0 ms
+Graph has 915 edges
+Path found with 6 waypoints
+```
+
 ![Visibility graph demo showing the planned path through polygonal obstacles](images/visibility_graph_demo.png)
 
 With a single-configuration generator, the executable is normally `build/main_demo` (`build/main_demo.exe` on Windows). The exact location depends on the selected CMake generator and build configuration.
