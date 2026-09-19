@@ -4,6 +4,45 @@ A C++ visibility-graph planner for static 2-D polygonal environments.
 
 VisGraphPlanner constructs and uses a visibility graph for path planning around polygonal obstacles. The core planner is a header-only CMake target. Optional visualization support and the demonstration executable use [MatPlotOpenCV](https://github.com/mwhannan74/MatPlotOpenCV).
 
+## How the Planner Works
+
+VisGraphPlanner finds point-to-point routes through a known, static 2-D environment whose obstacles are represented as polygons. It is a geometric path planner rather than a motion controller: its output is a sequence of positions to follow, without vehicle dynamics, turning constraints, or automatic safety clearance. Applications planning for a robot with nonzero size should expand the obstacles by the required footprint and safety margin before building the graph.
+
+The planner treats every obstacle corner as a graph vertex. It connects pairs of vertices when the straight segment between them does not cross an obstacle, while rejecting diagonals that pass through the interior of the same polygon. Each edge is weighted by its Euclidean length. For a planning query, the start and goal are added to the graph and connected to the vertices they can see; Dijkstra's algorithm then returns the lowest-distance route available in the graph.
+
+This approach is simple, deterministic, and effective for relatively small static maps, and it naturally produces direct paths that bend around obstacle corners. Its main tradeoff is scalability: the basic all-pairs visibility build is O(N³) in the number of obstacle vertices and can produce a dense graph. The implementation also assumes valid simple polygons, does not support polygon holes or changing obstacles, and uses floating-point geometric tests that may require care with nearly coincident geometry.
+
+## Assumptions and Limitations
+
+- Obstacles must be represented as simple, counter-clockwise polygons.
+- Each polygon must contain at least three vertices.
+- Polygon holes are not supported.
+- Start and goal points must not be strictly inside an obstacle.
+- The obstacle visibility graph is constructed using a naive O(N³) algorithm, where N is the number of obstacle vertices.
+- `injectQueryPts()` appends query vertices to the graph. The current API does not provide a method for removing or resetting previously injected query points.
+
+## Run the Demo
+
+From the repository root on Windows with a multi-configuration generator such as Visual Studio:
+
+```powershell
+.\build\Release\main_demo.exe
+```
+
+**Example Terminal Output:**
+```
+buildBasic() took 1 ms
+shortestPath() took 0 ms
+Graph has 915 edges
+Path found with 6 waypoints
+```
+
+Values vary between runs because the demo randomizes the obstacle positions and start and goal points.
+
+![Visibility graph demo showing the planned path through polygonal obstacles](images/visibility_graph_demo.png)
+
+With a single-configuration generator, the executable is normally `build/main_demo` (`build/main_demo.exe` on Windows). The exact location depends on the selected CMake generator and build configuration.
+
 ## Platform Status
 
 This project has been built and tested only on Windows. The code and CMake configuration are intended to be portable to Linux, but Linux has not yet been tested.
@@ -68,29 +107,39 @@ The project provides the following CMake targets:
 - `VisGraphPlanner::visgraph_visualization` — optional visualization support through MatPlotOpenCV
 - `main_demo` — demonstration executable, built when `VISGRAPH_BUILD_DEMO=ON`
 
-## Run the Demo
+## Basic Usage
 
-From the repository root on Windows with a multi-configuration generator such as Visual Studio:
+```cpp
+#include "visibility_graph.hpp"
 
-```powershell
-.\build\Release\main_demo.exe
+#include <iostream>
+#include <vector>
+
+int main()
+{
+    using namespace vg;
+
+    std::vector<Polygon> obstacles{
+        {
+            Point2(0.0, 0.0),
+            Point2(5.0, 0.0),
+            Point2(5.0, 5.0),
+            Point2(0.0, 5.0)
+        }
+    };
+
+    VisibilityGraph graph(obstacles);
+    graph.buildBasic();
+
+    const Point2 start(-2.0, 2.0);
+    const Point2 goal(7.0, 2.0);
+
+    const auto [startId, goalId] = graph.injectQueryPts(start, goal);
+    const auto path = graph.shortestPath(startId, goalId);
+
+    std::cout << "Path contains " << path.size() << " points\n";
+}
 ```
-
-**Terminal Output:**
-```
-buildBasic() took 1 ms
-shortestPath() took 0 ms
-Graph has 915 edges
-Path found with 6 waypoints
-```
-
-![Visibility graph demo showing the planned path through polygonal obstacles](images/visibility_graph_demo.png)
-
-With a single-configuration generator, the executable is normally `build/main_demo` (`build/main_demo.exe` on Windows). The exact location depends on the selected CMake generator and build configuration.
-
-## Project Scope
-
-VisGraphPlanner is intended for path planning in static, two-dimensional environments represented by polygonal obstacles.
 
 ## License
 
