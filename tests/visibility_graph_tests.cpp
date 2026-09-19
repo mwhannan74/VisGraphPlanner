@@ -12,6 +12,7 @@
  *   - direct path without obstacles
  *   - shortest path around a square
  *   - rejection of diagonals through an obstacle
+ *   - rejection of crossings through small-scale obstacles
  *   - rejection of a query inside an obstacle
  *   - ignoring polygons with fewer than three vertices
  *   - identical start and goal
@@ -160,6 +161,30 @@ namespace
         require(!hasEdge(graph, 1, 3), "opposite polygon diagonal must be rejected");
     }
 
+    void smallScaleObstacleBlocksDirectPath()
+    {
+        const Polygon smallSquare{
+            Point2(0.0, 0.0),
+            Point2(1e-4, 0.0),
+            Point2(1e-4, 1e-4),
+            Point2(0.0, 1e-4)
+        };
+        VisibilityGraph graph({ smallSquare });
+        graph.buildBasic();
+
+        const Point2 start(-1e-4, 5e-5);
+        const Point2 goal(2e-4, 5e-5);
+        const auto [startId, goalId] = graph.injectQueryPts(start, goal);
+        const auto path = graph.shortestPath(startId, goalId);
+
+        require(!hasEdge(graph, startId, goalId),
+            "a direct edge crossing a small-scale obstacle must be rejected");
+        require(path.size() > 2,
+            "a path crossing a small-scale obstacle should route around it");
+        require(pathLength(path) > (goal - start).norm(),
+            "the routed path should be longer than the blocked direct segment");
+    }
+
     void queryInsideObstacleIsRejected()
     {
         VisibilityGraph graph({ makeSquare() });
@@ -274,6 +299,7 @@ namespace
         { "Direct path in empty environment", directPathInEmptyEnvironment },
         { "Shortest path routes around square", shortestPathRoutesAroundSquare },
         { "Obstacle boundary excludes interior chord", obstacleBoundaryEdgesExcludeInteriorChord },
+        { "Small-scale obstacle blocks direct path", smallScaleObstacleBlocksDirectPath },
         { "Query inside obstacle is rejected", queryInsideObstacleIsRejected },
         { "Undersized polygon is ignored", undersizedPolygonIsIgnored },
         { "Identical start and goal", identicalStartAndGoalReturnsZeroLengthPath },

@@ -439,7 +439,13 @@ namespace vg
             const double o3 = orient2D(s2.a, s2.b, s1.a);
             const double o4 = orient2D(s2.a, s2.b, s1.b);
 
-            if ((o1 * o2 < -EPS) && (o3 * o4 < -EPS)) return true;
+            const auto haveOppositeSigns = [](double lhs, double rhs)
+            {
+                return (lhs > EPS && rhs < -EPS) ||
+                       (lhs < -EPS && rhs > EPS);
+            };
+
+            if (haveOppositeSigns(o1, o2) && haveOppositeSigns(o3, o4)) return true;
             if (std::abs(o1) < EPS && onSegment(s1.a, s1.b, s2.a)) return true;
             if (std::abs(o2) < EPS && onSegment(s1.a, s1.b, s2.b)) return true;
             if (std::abs(o3) < EPS && onSegment(s2.a, s2.b, s1.a)) return true;

@@ -12,8 +12,10 @@
 #include "visibility_graph.hpp"
 #include "visibility_graph_visualization.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <chrono>
+#include <limits>
 #include <vector>
 #include <random>
 
@@ -59,22 +61,28 @@ int main()
     vg.buildBasic();
     const auto t1 = std::chrono::high_resolution_clock::now();
 
-    // 3. Define start and goal outside the obstacle field
-    double s_dx = 0.0, s_dy = 0.0;
-    double g_dx = 0.0, g_dy = 0.0;
+    // 3. Define randomized start and goal positions guaranteed to be outside
+    // the obstacle field.
+    double min_x = std::numeric_limits<double>::infinity();
+    double min_y = std::numeric_limits<double>::infinity();
+    double max_x = -std::numeric_limits<double>::infinity();
+    double max_y = -std::numeric_limits<double>::infinity();
+    for (const auto& obstacle : obstacles)
+    {
+        for (const auto& point : obstacle)
+        {
+            min_x = std::min(min_x, point.x());
+            min_y = std::min(min_y, point.y());
+            max_x = std::max(max_x, point.x());
+            max_y = std::max(max_y, point.y());
+        }
+    }
 
-    //std::mt19937 gen(std::random_device{}());
-    std::uniform_real_distribution<double> dist(-2*gap, 2*gap);
-    s_dx = dist(gen);
-    s_dy = dist(gen);
-    g_dx = dist(gen);
-    g_dy = dist(gen);
-
-    Point2 S(-1.0 + s_dx, -1.0 + s_dy);
-    Point2 G(cols * (size + gap) + 1.0 + g_dx, rows * (size + gap) + 1.0 + g_dy);
-
-    //Point2 S(-1.0, -1.0);
-    //Point2 G(cols * (size + gap) + 1.0, rows * (size + gap) + 1.0);
+    std::uniform_real_distribution<double> terminal_offset(0.0, 2.0 * gap);
+    Point2 S(min_x - gap - terminal_offset(gen),
+             min_y - gap - terminal_offset(gen));
+    Point2 G(max_x + gap + terminal_offset(gen),
+             max_y + gap + terminal_offset(gen));
 
     // 4. Inject S/G and solve for shortest path
     auto [sid, gid] = vg.injectQueryPts(S, G);
