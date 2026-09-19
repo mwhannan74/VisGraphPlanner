@@ -5,6 +5,8 @@
  * Core features
  *   • Naïve O(N³) obstacle-only build, query-time insertion of S & G.
  *   • Segment-intersection tests plus “same-polygon chord” rejection.
+ *   • Optional convex operation area with convex obstacle clipping.
+ *   • Convex, counter-clockwise obstacle validation.
  *   • Polygon-size validation (skips <3-vertex inputs with a warning).
  *
  * Example (see main_demo.cpp):
@@ -33,7 +35,7 @@ namespace vg
 {
     // geometry and graph component types
     using Point2 = Eigen::Vector2d;
-    using Polygon = std::vector<Point2>;   // CCW, simple, ≥3 verts
+    using Polygon = std::vector<Point2>;   // convex, CCW, simple, ≥3 verts
     struct Segment2 { Point2 a, b; };
     struct Edge { std::size_t to; double cost; };
     struct Vertex { Point2 pos; int poly_id; bool is_query; };
@@ -66,42 +68,47 @@ namespace vg
     {
     public:
         /**
-         * @brief Construct from list of simple CCW polygons.
+         * @brief Construct from a list of convex, simple CCW polygons.
          *
          * Polygons with <3 vertices are skipped with a warning.
          * Obstacle vertices are copied into @c _vertices in input order.
-         * The caller is responsible for supplying finite coordinates and
-         * valid, simple, counter-clockwise polygons. Self-intersections,
+         * Polygons with at least three vertices must be convex and
+         * counter-clockwise; otherwise construction throws. Collinear points
+         * along the boundary are permitted. The caller is responsible for
+         * supplying finite coordinates and simple polygons. Self-intersections,
          * duplicate vertices, and overlapping obstacles are not validated.
          *
          * @param obstacles List of polygons representing obstacles.
          */
         explicit VisibilityGraph(const std::vector<Polygon>& obstacles)
         {
-            std::size_t reserveN = 0;
+            initializeObstacles(obstacles);
+        }
 
-            // Validate and cache obstacles
-            for (const auto& poly : obstacles)
+        /**
+         * @brief Construct a graph constrained to a convex operation area.
+         *
+         * Start and goal queries must be strictly inside @p operationArea.
+         * Obstacles are clipped to the operation area. Obstacles wholly
+         * outside it, or touching it with zero intersection area, are ignored.
+         *
+         * @param operationArea Convex, simple, counter-clockwise keep-in area.
+         * @param obstacles List of convex obstacle polygons.
+         * @throws std::invalid_argument if the operation area or an obstacle
+         * is not convex and counter-clockwise.
+         */
+        VisibilityGraph(const Polygon& operationArea,
+            const std::vector<Polygon>& obstacles)
+            : _operationArea(operationArea), _hasOperationArea(true)
+        {
+            if (_operationArea.size() < 3 ||
+                !isConvexCounterClockwise(_operationArea))
             {
-                if (poly.size() < 3)
-                {
-                    std::cerr << "[VG] Warning: polygon with " << poly.size() << " vertex/vertices ignored (need >=3).\n";
-                    continue;
-                }
-                _obstacles.push_back(poly);
-                reserveN += poly.size();
+                throw std::invalid_argument(
+                    "VisibilityGraph: operation area must be a convex, counter-clockwise polygon");
             }
 
-            // Pre-allocate storage
-            _vertices.reserve(reserveN);
-            _adjacency.reserve(reserveN);
-
-            // Flatten obstacle vertices
-            for (std::size_t pid = 0; pid < _obstacles.size(); ++pid)
-                for (const auto& pt : _obstacles[pid])
-                    addVertex(pt, /*query=*/false, static_cast<int>(pid));
-
-            _obstacleVertexCount = _vertices.size();
+            initializeObstacles(obstacles);
         }
 
         /**
@@ -152,6 +159,16 @@ namespace vg
         {
             if (!_isBuilt)
                 throw std::logic_error("injectQueryPts: buildBasic() must be called first");
+
+            if (_hasOperationArea)
+            {
+                if (pointInPolygon(S, _operationArea) != PointLocation::Inside)
+                    throw std::runtime_error(
+                        "injectQueryPts: Start must be strictly inside the operation area");
+                if (pointInPolygon(G, _operationArea) != PointLocation::Inside)
+                    throw std::runtime_error(
+                        "injectQueryPts: Goal must be strictly inside the operation area");
+            }
 
             // Reject points inside or on an obstacle boundary.
             for (const auto& poly : _obstacles)
@@ -237,6 +254,22 @@ namespace vg
         }
 
         // Read-only getters
+        bool hasOperationArea() const { return _hasOperationArea; }
+
+        const Polygon& operationArea() const
+        {
+            if (!_hasOperationArea)
+                throw std::logic_error("operationArea: graph has no operation area");
+            return _operationArea;
+        }
+
+        // Original validated obstacles, including geometry outside an operation area.
+        const std::vector<Polygon>& originalObstacles() const { return _originalObstacles; }
+
+        // Positive-area effective obstacles whose geometry changed during clipping.
+        const std::vector<Polygon>& clippedObstacles() const { return _clippedObstacles; }
+
+        // Effective obstacles used to construct the visibility graph.
         const std::vector<Polygon>& obstacles() const { return _obstacles; }
         const std::vector<Vertex>& vertices()  const { return _vertices; }
         const std::vector<std::vector<Edge>>& adjacency() const { return _adjacency; }
@@ -250,8 +283,217 @@ namespace vg
 
     private:
 
+        /**
+         * @brief Validates, filters, and flattens input obstacles.
+         */
+        void initializeObstacles(const std::vector<Polygon>& obstacles)
+        {
+            std::size_t reserveN = 0;
+
+            for (const auto& poly : obstacles)
+            {
+                if (poly.size() < 3)
+                {
+                    std::cerr << "[VG] Warning: polygon with " << poly.size()
+                              << " vertex/vertices ignored (need >=3).\n";
+                    continue;
+                }
+                if (!isConvexCounterClockwise(poly))
+                {
+                    throw std::invalid_argument(
+                        "VisibilityGraph: obstacle polygons must be convex and counter-clockwise");
+                }
+
+                _originalObstacles.push_back(poly);
+
+                Polygon effectiveObstacle = _hasOperationArea
+                    ? clipConvexPolygon(poly, _operationArea)
+                    : poly;
+                if (effectiveObstacle.size() < 3 ||
+                    std::abs(signedAreaTwice(effectiveObstacle)) <= EPS)
+                {
+                    continue;
+                }
+
+                if (_hasOperationArea &&
+                    !polygonsEquivalent(poly, effectiveObstacle))
+                {
+                    _clippedObstacles.push_back(effectiveObstacle);
+                }
+
+                reserveN += effectiveObstacle.size();
+                _obstacles.push_back(std::move(effectiveObstacle));
+            }
+
+            _vertices.reserve(reserveN);
+            _adjacency.reserve(reserveN);
+
+            for (std::size_t pid = 0; pid < _obstacles.size(); ++pid)
+            {
+                for (const auto& pt : _obstacles[pid])
+                {
+                    if (_hasOperationArea &&
+                        pointInPolygon(pt, _operationArea) == PointLocation::OnEdge)
+                    {
+                        continue;
+                    }
+                    addVertex(pt, /*query=*/false, static_cast<int>(pid));
+                }
+            }
+
+            _obstacleVertexCount = _vertices.size();
+        }
+
+        static double signedAreaTwice(const Polygon& poly)
+        {
+            double area = 0.0;
+            for (std::size_t i = 0; i < poly.size(); ++i)
+            {
+                const Point2& current = poly[i];
+                const Point2& next = poly[(i + 1) % poly.size()];
+                area += current.x() * next.y() - current.y() * next.x();
+            }
+            return area;
+        }
+
+        static bool polygonsEquivalent(const Polygon& lhs, const Polygon& rhs)
+        {
+            if (lhs.size() != rhs.size())
+                return false;
+
+            for (std::size_t i = 0; i < lhs.size(); ++i)
+            {
+                if ((lhs[i] - rhs[i]).squaredNorm() >= EPS * EPS)
+                    return false;
+            }
+            return true;
+        }
+
+        static void appendUniquePoint(Polygon& poly, const Point2& point)
+        {
+            if (poly.empty() ||
+                (poly.back() - point).squaredNorm() >= EPS * EPS)
+            {
+                poly.push_back(point);
+            }
+        }
+
+        static Polygon removeDuplicateClosingPoint(Polygon poly)
+        {
+            if (poly.size() > 1 &&
+                (poly.front() - poly.back()).squaredNorm() < EPS * EPS)
+            {
+                poly.pop_back();
+            }
+            return poly;
+        }
+
+        static Point2 intersectWithBoundary(const Point2& start,
+            const Point2& end,
+            const Point2& boundaryStart,
+            const Point2& boundaryEnd)
+        {
+            const double startSide = orient2D(
+                boundaryStart, boundaryEnd, start);
+            const double endSide = orient2D(
+                boundaryStart, boundaryEnd, end);
+            const double t = startSide / (startSide - endSide);
+            return start + std::clamp(t, 0.0, 1.0) * (end - start);
+        }
+
+        /**
+         * @brief Intersects one convex CCW polygon with another.
+         *
+         * Uses Sutherland-Hodgman clipping. Points on the operation-area
+         * boundary are retained. Empty, point-only, and line-only results are
+         * filtered by initializeObstacles().
+         */
+        static Polygon clipConvexPolygon(const Polygon& subject,
+            const Polygon& clippingArea)
+        {
+            Polygon output = subject;
+
+            for (std::size_t i = 0; i < clippingArea.size(); ++i)
+            {
+                if (output.empty())
+                    break;
+
+                const Point2& boundaryStart = clippingArea[i];
+                const Point2& boundaryEnd =
+                    clippingArea[(i + 1) % clippingArea.size()];
+                Polygon input = std::move(output);
+                output.clear();
+                output.reserve(input.size() + 1);
+
+                Point2 start = input.back();
+                bool startInside = orient2D(
+                    boundaryStart, boundaryEnd, start) >= -EPS;
+
+                for (const auto& end : input)
+                {
+                    const bool endInside = orient2D(
+                        boundaryStart, boundaryEnd, end) >= -EPS;
+
+                    if (endInside)
+                    {
+                        if (!startInside)
+                        {
+                            appendUniquePoint(output, intersectWithBoundary(
+                                start, end, boundaryStart, boundaryEnd));
+                        }
+                        appendUniquePoint(output, end);
+                    }
+                    else if (startInside)
+                    {
+                        appendUniquePoint(output, intersectWithBoundary(
+                            start, end, boundaryStart, boundaryEnd));
+                    }
+
+                    start = end;
+                    startInside = endInside;
+                }
+
+                output = removeDuplicateClosingPoint(std::move(output));
+            }
+
+            return output;
+        }
+
+        /**
+         * @brief Checks that an ordered polygon is convex and counter-clockwise.
+         *
+         * Collinear consecutive vertices are allowed, but the polygon must
+         * contain at least one counter-clockwise turn and no clockwise turns.
+         * Simplicity and duplicate-vertex validation remain caller
+         * responsibilities.
+         */
+        static bool isConvexCounterClockwise(const Polygon& poly)
+        {
+            bool hasCounterClockwiseTurn = false;
+            const std::size_t n = poly.size();
+
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                const double turn = orient2D(
+                    poly[i],
+                    poly[(i + 1) % n],
+                    poly[(i + 2) % n]);
+
+                if (turn < -EPS)
+                    return false;
+                if (turn > EPS)
+                    hasCounterClockwiseTurn = true;
+            }
+
+            return hasCounterClockwiseTurn;
+        }
+
         // Data
-        std::vector<Polygon>              _obstacles; // input polygon for each obstacle
+        Polygon                           _operationArea;
+        bool                              _hasOperationArea = false;
+        std::vector<Polygon>              _originalObstacles;
+        std::vector<Polygon>              _clippedObstacles;
+        std::vector<Polygon>              _obstacles; // effective obstacle polygons
         std::vector<Vertex>               _vertices;  // vertices from each obstacle
         std::vector<std::vector<Edge>>    _adjacency; //  for each vertex, the list of adjacent edges (i.e. the vertices directly visible/connected to it).
         std::vector<std::vector<Edge>>    _obstacleAdjacency;

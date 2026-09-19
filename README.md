@@ -2,11 +2,18 @@
 
 A C++ visibility-graph planner for static 2-D polygonal environments.
 
-VisGraphPlanner constructs and uses a visibility graph for path planning around polygonal obstacles. The core planner is a header-only CMake target. Optional visualization support and the demonstration executable use [MatPlotOpenCV](https://github.com/mwhannan74/MatPlotOpenCV).
+VisGraphPlanner constructs and uses a visibility graph for path planning around polygonal obstacles. The core planner is a header-only CMake target. Optional visualization support and the demonstration executables use [MatPlotOpenCV](https://github.com/mwhannan74/MatPlotOpenCV).
 
 ## How the Planner Works
 
 VisGraphPlanner finds point-to-point routes through a known, static 2-D environment whose obstacles are represented as polygons. It is a geometric path planner rather than a motion controller: its output is a sequence of positions to follow, without vehicle dynamics, turning constraints, or automatic safety clearance. Applications planning for a robot with nonzero size should expand the obstacles by the required footprint and safety margin before building the graph.
+
+An optional convex operation area can constrain planning to a keep-in zone. Start and goal points must be strictly inside this area. Obstacles are clipped to the operation area, and obstacles with no positive-area intersection are ignored.
+
+Obstacle vertices created on, or already lying on, the operation-area boundary
+are retained in the effective obstacle geometry for collision checks but are
+excluded from the visibility graph. All graph vertices therefore remain
+strictly inside the operation area.
 
 The planner treats every obstacle corner as a graph vertex. It connects pairs of vertices when the straight segment between them does not cross an obstacle, while rejecting diagonals that pass through the interior of the same polygon. Each edge is weighted by its Euclidean length. For a planning query, the start and goal are added to the graph and connected to the vertices they can see; Dijkstra's algorithm then returns the lowest-distance route available in the graph.
 
@@ -14,10 +21,12 @@ This approach is simple, deterministic, and effective for relatively small stati
 
 ## Assumptions and Limitations
 
-- Obstacles must be represented as simple, counter-clockwise polygons.
+- Obstacles must be represented as convex, simple, counter-clockwise polygons.
 - Each polygon must contain at least three vertices.
 - Polygon holes are not supported.
 - Start and goal points must be outside every obstacle and must not lie on an obstacle boundary.
+- When an operation area is supplied, it must be convex, simple, and counter-clockwise, and start and goal must be strictly inside it.
+- Obstacles crossing an operation-area boundary are clipped to the portion inside the area.
 - The obstacle visibility graph is constructed using a naive O(N³) algorithm, where N is the number of obstacle vertices.
 - Each call to `injectQueryPts()` replaces the previous start and goal while reusing the obstacle-only graph.
 
@@ -28,6 +37,21 @@ From the repository root on Windows with a multi-configuration generator such as
 ```powershell
 .\build\Release\main_demo.exe
 ```
+
+To run the deterministic operation-area and obstacle-clipping demo:
+
+```powershell
+.\build\Release\operation_area_demo.exe
+```
+
+The operation-area demo includes an obstacle inside the area, an obstacle
+clipped at one boundary, an entirely outside obstacle that is discarded, and
+an obstacle whose original vertices are all outside but whose edges cross an
+operation-area corner. Original obstacles are drawn in blue, while their
+positive-area clipped results are overlaid in magenta. The operation-area
+boundary is a thin dark-green outline. Usable visibility-graph edges are drawn as
+thicker gray lines with explicit vertex markers, and the final path is drawn
+over them in red.
 
 **Example Terminal Output:**
 ```
@@ -52,7 +76,7 @@ This project has been built and tested only on Windows. The code and CMake confi
 - CMake 3.16 or newer
 - A C++17 compiler
 - [Eigen](https://eigen.tuxfamily.org/) for the core planner
-- [MatPlotOpenCV](https://github.com/mwhannan74/MatPlotOpenCV) for visualization and the demo
+- [MatPlotOpenCV](https://github.com/mwhannan74/MatPlotOpenCV) for visualization and the demos
 - OpenCV 4.5 or newer with the `core`, `highgui`, and `imgproc` components, as required by MatPlotOpenCV
 - Doxygen if MatPlotOpenCV documentation is enabled; pass `-DMATPLOTOPENCV_BUILD_DOCS=OFF` if it is not needed
 
@@ -130,6 +154,7 @@ The project provides the following CMake targets:
 - `VisGraphPlanner::visgraph` — header-only core visibility-graph planner
 - `VisGraphPlanner::visgraph_visualization` — optional visualization support through MatPlotOpenCV
 - `main_demo` — demonstration executable, built when `VISGRAPH_BUILD_DEMO=ON`
+- `operation_area_demo` — deterministic operation-area and clipping demo, built when `VISGRAPH_BUILD_DEMO=ON`
 
 ## Basic Usage
 
@@ -163,6 +188,20 @@ int main()
 
     std::cout << "Path contains " << path.size() << " points\n";
 }
+```
+
+To constrain the same planner to a convex operation area, pass it before the
+obstacle list:
+
+```cpp
+Polygon operationArea{
+    Point2(-10.0, -10.0),
+    Point2(10.0, -10.0),
+    Point2(10.0, 10.0),
+    Point2(-10.0, 10.0)
+};
+
+VisibilityGraph constrainedGraph(operationArea, obstacles);
 ```
 
 ## License

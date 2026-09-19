@@ -22,7 +22,7 @@ target_include_directories(visgraph
 )
 
 # ---------- Demo executable --------------------------------------------------
-option(VISGRAPH_BUILD_DEMO "Build the main demo executable." ON)
+option(VISGRAPH_BUILD_DEMO "Build the demo executables." ON)
 option(VISGRAPH_ENABLE_VISUALIZATION "Enable visualization support via MatPlotOpenCV." ON)
 
 if(VISGRAPH_ENABLE_VISUALIZATION)
@@ -50,7 +50,16 @@ if(VISGRAPH_BUILD_DEMO)
         demo/main_demo.cpp
     )
 
+    add_executable(operation_area_demo
+        demo/operation_area_demo.cpp
+    )
+
     target_link_libraries(main_demo
+        PRIVATE
+            VisGraphPlanner::visgraph_visualization
+    )
+
+    target_link_libraries(operation_area_demo
         PRIVATE
             VisGraphPlanner::visgraph_visualization
     )

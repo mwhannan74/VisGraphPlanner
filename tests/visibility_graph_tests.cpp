@@ -13,6 +13,14 @@
  *   - shortest path around a square
  *   - rejection of diagonals through an obstacle
  *   - rejection of crossings through small-scale obstacles
+ *   - acceptance of convex counter-clockwise obstacles
+ *   - acceptance of collinear vertices on a convex boundary
+ *   - rejection of concave and clockwise obstacles
+ *   - operation-area validation and query containment
+ *   - operation-area obstacle filtering
+ *   - clipping obstacles at an operation-area boundary
+ *   - exclusion of operation-boundary points from graph vertices
+ *   - preservation of original and clipped obstacle views
  *   - rejection of a query inside an obstacle
  *   - ignoring polygons with fewer than three vertices
  *   - identical start and goal
@@ -113,6 +121,16 @@ namespace
         };
     }
 
+    Polygon makeOperationArea()
+    {
+        return {
+            Point2(0.0, 0.0),
+            Point2(10.0, 0.0),
+            Point2(10.0, 10.0),
+            Point2(0.0, 10.0)
+        };
+    }
+
     // Working behavior and straightforward cases are listed first.
 
     void directPathInEmptyEnvironment()
@@ -183,6 +201,392 @@ namespace
             "a path crossing a small-scale obstacle should route around it");
         require(pathLength(path) > (goal - start).norm(),
             "the routed path should be longer than the blocked direct segment");
+    }
+
+    void convexCounterClockwiseObstacleIsAccepted()
+    {
+        const Polygon pentagon{
+            Point2(0.0, 0.0),
+            Point2(3.0, 0.0),
+            Point2(4.0, 2.0),
+            Point2(2.0, 4.0),
+            Point2(0.0, 2.0)
+        };
+
+        VisibilityGraph graph({ pentagon });
+        graph.buildBasic();
+
+        require(graph.obstacles().size() == 1,
+            "a convex counter-clockwise obstacle should be accepted");
+        require(graph.vertices().size() == pentagon.size(),
+            "an accepted convex obstacle should retain all of its vertices");
+    }
+
+    void convexObstacleMayContainCollinearBoundaryVertex()
+    {
+        const Polygon rectangleWithExtraVertex{
+            Point2(0.0, 0.0),
+            Point2(2.0, 0.0),
+            Point2(4.0, 0.0),
+            Point2(4.0, 3.0),
+            Point2(0.0, 3.0)
+        };
+
+        VisibilityGraph graph({ rectangleWithExtraVertex });
+
+        require(graph.obstacles().size() == 1,
+            "collinear boundary vertices should be permitted in a convex obstacle");
+    }
+
+    void concaveObstacleIsRejected()
+    {
+        const Polygon concave{
+            Point2(0.0, 0.0),
+            Point2(4.0, 0.0),
+            Point2(2.0, 1.0),
+            Point2(4.0, 4.0),
+            Point2(0.0, 4.0)
+        };
+
+        requireThrows<std::invalid_argument>(
+            [&concave] { VisibilityGraph graph({ concave }); },
+            "a concave obstacle should be rejected");
+    }
+
+    void clockwiseObstacleIsRejected()
+    {
+        const Polygon clockwiseSquare{
+            Point2(0.0, 0.0),
+            Point2(0.0, 4.0),
+            Point2(4.0, 4.0),
+            Point2(4.0, 0.0)
+        };
+
+        requireThrows<std::invalid_argument>(
+            [&clockwiseSquare] { VisibilityGraph graph({ clockwiseSquare }); },
+            "a clockwise obstacle should be rejected");
+    }
+
+    void operationAreaSupportsContainedQueries()
+    {
+        const Polygon operationArea = makeOperationArea();
+        VisibilityGraph graph(operationArea, {});
+        graph.buildBasic();
+
+        const Point2 start(1.0, 2.0);
+        const Point2 goal(9.0, 8.0);
+        const auto [startId, goalId] = graph.injectQueryPts(start, goal);
+        const auto path = graph.shortestPath(startId, goalId);
+
+        require(graph.hasOperationArea(),
+            "the operation-area constructor should record the operation area");
+        require(graph.operationArea().size() == operationArea.size(),
+            "the stored operation area should retain its vertices");
+        require(path.size() == 2,
+            "queries inside an empty operation area should have a direct path");
+    }
+
+    void graphWithoutOperationAreaPreservesExistingBehavior()
+    {
+        VisibilityGraph graph({});
+
+        require(!graph.hasOperationArea(),
+            "the original constructor should not create an operation area");
+        requireThrows<std::logic_error>(
+            [&graph] { static_cast<void>(graph.operationArea()); },
+            "requesting a missing operation area should be rejected");
+    }
+
+    void invalidOperationAreasAreRejected()
+    {
+        const Polygon undersized{
+            Point2(0.0, 0.0),
+            Point2(10.0, 0.0)
+        };
+        const Polygon concave{
+            Point2(0.0, 0.0),
+            Point2(10.0, 0.0),
+            Point2(5.0, 2.0),
+            Point2(10.0, 10.0),
+            Point2(0.0, 10.0)
+        };
+        const Polygon clockwise{
+            Point2(0.0, 0.0),
+            Point2(0.0, 10.0),
+            Point2(10.0, 10.0),
+            Point2(10.0, 0.0)
+        };
+
+        requireThrows<std::invalid_argument>(
+            [&undersized] { VisibilityGraph graph(undersized, {}); },
+            "an undersized operation area should be rejected");
+        requireThrows<std::invalid_argument>(
+            [&concave] { VisibilityGraph graph(concave, {}); },
+            "a concave operation area should be rejected");
+        requireThrows<std::invalid_argument>(
+            [&clockwise] { VisibilityGraph graph(clockwise, {}); },
+            "a clockwise operation area should be rejected");
+    }
+
+    void operationAreaRejectsQueriesNotStrictlyInside()
+    {
+        VisibilityGraph graph(makeOperationArea(), {});
+        graph.buildBasic();
+
+        requireThrows<std::runtime_error>(
+            [&graph] { graph.injectQueryPts(Point2(-1.0, 5.0), Point2(5.0, 5.0)); },
+            "a start outside the operation area should be rejected");
+        requireThrows<std::runtime_error>(
+            [&graph] { graph.injectQueryPts(Point2(5.0, 5.0), Point2(11.0, 5.0)); },
+            "a goal outside the operation area should be rejected");
+        requireThrows<std::runtime_error>(
+            [&graph] { graph.injectQueryPts(Point2(0.0, 5.0), Point2(5.0, 5.0)); },
+            "a start on the operation-area boundary should be rejected");
+        requireThrows<std::runtime_error>(
+            [&graph] { graph.injectQueryPts(Point2(5.0, 5.0), Point2(10.0, 5.0)); },
+            "a goal on the operation-area boundary should be rejected");
+    }
+
+    void operationAreaRetainsContainedObstacle()
+    {
+        const Polygon obstacle{
+            Point2(3.0, 3.0),
+            Point2(7.0, 3.0),
+            Point2(7.0, 7.0),
+            Point2(3.0, 7.0)
+        };
+        VisibilityGraph graph(makeOperationArea(), { obstacle });
+        graph.buildBasic();
+
+        const auto [startId, goalId] = graph.injectQueryPts(
+            Point2(1.0, 5.0), Point2(9.0, 5.0));
+        const auto path = graph.shortestPath(startId, goalId);
+
+        require(graph.obstacles().size() == 1,
+            "an obstacle contained by the operation area should be retained");
+        require(path.size() > 2,
+            "a contained obstacle should still block a direct route");
+    }
+
+    void operationAreaRetainsObstacleOnBoundary()
+    {
+        const Polygon boundaryObstacle{
+            Point2(0.0, 3.0),
+            Point2(3.0, 3.0),
+            Point2(3.0, 7.0),
+            Point2(0.0, 7.0)
+        };
+        VisibilityGraph graph(makeOperationArea(), { boundaryObstacle });
+
+        require(graph.obstacles().size() == 1,
+            "an obstacle contained by and touching the operation-area boundary should be retained");
+        require(graph.vertices().size() == 2,
+            "vertices on the operation-area boundary must not enter the graph");
+        for (const auto& vertex : graph.vertices())
+        {
+            require(vertex.pos.x() > TEST_EPS && vertex.pos.x() < 10.0 - TEST_EPS &&
+                    vertex.pos.y() > TEST_EPS && vertex.pos.y() < 10.0 - TEST_EPS,
+                "every retained obstacle graph vertex must be strictly inside the operation area");
+        }
+    }
+
+    void operationAreaDiscardsOutsideObstacle()
+    {
+        const Polygon outsideObstacle{
+            Point2(12.0, 2.0),
+            Point2(14.0, 2.0),
+            Point2(14.0, 4.0),
+            Point2(12.0, 4.0)
+        };
+        VisibilityGraph graph(makeOperationArea(), { outsideObstacle });
+
+        require(graph.obstacles().empty(),
+            "an obstacle wholly outside the operation area should be discarded");
+        require(graph.vertices().empty(),
+            "a discarded outside obstacle should not contribute graph vertices");
+    }
+
+    void operationAreaClipsCrossingObstacleAndRoutesAroundIt()
+    {
+        const Polygon crossingObstacle{
+            Point2(6.0, 3.0),
+            Point2(12.0, 3.0),
+            Point2(12.0, 7.0),
+            Point2(6.0, 7.0)
+        };
+        VisibilityGraph graph(makeOperationArea(), { crossingObstacle });
+        graph.buildBasic();
+
+        const auto& clipped = graph.obstacles();
+        require(clipped.size() == 1,
+            "an obstacle crossing the operation-area boundary should be retained after clipping");
+        require(clipped.front().size() == 4,
+            "a clipped rectangle should contain four vertices");
+        bool hasOperationBoundaryVertex = false;
+        for (const auto& point : clipped.front())
+        {
+            require(point.x() <= 10.0 + TEST_EPS,
+                "clipped obstacle vertices must remain inside the operation area");
+            hasOperationBoundaryVertex = hasOperationBoundaryVertex ||
+                std::abs(point.x() - 10.0) <= TEST_EPS;
+        }
+        require(hasOperationBoundaryVertex,
+            "clipping should create vertices on the operation-area boundary");
+        require(graph.vertices().size() == 2,
+            "clipped operation-boundary intersections must not become graph vertices");
+        for (const auto& vertex : graph.vertices())
+        {
+            require(vertex.pos.x() > TEST_EPS && vertex.pos.x() < 10.0 - TEST_EPS &&
+                    vertex.pos.y() > TEST_EPS && vertex.pos.y() < 10.0 - TEST_EPS,
+                "visibility-graph vertices must be strictly inside the operation area");
+        }
+
+        const auto [startId, goalId] = graph.injectQueryPts(
+            Point2(2.0, 2.0), Point2(9.0, 9.0));
+        const auto path = graph.shortestPath(startId, goalId);
+        require(path.size() > 2,
+            "a route should bend around the clipped obstacle");
+        for (const auto& point : path)
+        {
+            require(point.x() >= -TEST_EPS && point.x() <= 10.0 + TEST_EPS &&
+                    point.y() >= -TEST_EPS && point.y() <= 10.0 + TEST_EPS,
+                "a route around a clipped obstacle must remain in the operation area");
+        }
+    }
+
+    void operationAreaClipsCrossingObstacleWithAllVerticesOutside()
+    {
+        const Polygon crossingObstacle{
+            Point2(-1.0, 4.0),
+            Point2(11.0, 4.0),
+            Point2(11.0, 6.0),
+            Point2(-1.0, 6.0)
+        };
+
+        VisibilityGraph graph(makeOperationArea(), { crossingObstacle });
+
+        require(graph.obstacles().size() == 1,
+            "a crossing obstacle must not be discarded merely because all vertices are outside");
+        require(graph.obstacles().front().size() == 4,
+            "a strip crossing the operation area should clip to a rectangle");
+        for (const auto& point : graph.obstacles().front())
+        {
+            require(point.x() >= -TEST_EPS && point.x() <= 10.0 + TEST_EPS,
+                "the crossing strip should be clipped to the operation-area width");
+        }
+        require(graph.vertices().empty(),
+            "a clipped obstacle with only operation-boundary vertices must add no graph vertices");
+
+        graph.buildBasic();
+        const auto [startId, goalId] = graph.injectQueryPts(
+            Point2(5.0, 2.0), Point2(5.0, 8.0));
+        require(graph.shortestPath(startId, goalId).empty(),
+            "a boundary-to-boundary obstacle must not be bypassed through clipped boundary vertices");
+    }
+
+    void operationAreaClipsObstacleContainingEntireArea()
+    {
+        const Polygon containingObstacle{
+            Point2(-2.0, -2.0),
+            Point2(12.0, -2.0),
+            Point2(12.0, 12.0),
+            Point2(-2.0, 12.0)
+        };
+
+        VisibilityGraph graph(makeOperationArea(), { containingObstacle });
+        graph.buildBasic();
+
+        require(graph.obstacles().size() == 1,
+            "an obstacle containing the operation area should clip to that area");
+        require(graph.obstacles().front().size() == makeOperationArea().size(),
+            "the clipped containing obstacle should match the operation-area shape");
+        requireThrows<std::runtime_error>(
+            [&graph] { graph.injectQueryPts(Point2(2.0, 2.0), Point2(8.0, 8.0)); },
+            "a clipped obstacle covering the operation area should reject every query");
+    }
+
+    void operationAreaClipsObstacleCrossingCorner()
+    {
+        const Polygon cornerObstacle{
+            Point2(8.0, 8.0),
+            Point2(12.0, 8.0),
+            Point2(12.0, 12.0),
+            Point2(8.0, 12.0)
+        };
+        VisibilityGraph graph(makeOperationArea(), { cornerObstacle });
+
+        require(graph.obstacles().size() == 1,
+            "an obstacle crossing an operation-area corner should be retained");
+        require(graph.obstacles().front().size() == 4,
+            "a rectangle crossing a corner should clip to a rectangle");
+        for (const auto& point : graph.obstacles().front())
+        {
+            require(point.x() >= 8.0 - TEST_EPS && point.x() <= 10.0 + TEST_EPS &&
+                    point.y() >= 8.0 - TEST_EPS && point.y() <= 10.0 + TEST_EPS,
+                "corner-clipped vertices should lie in the overlapping square");
+        }
+        require(graph.vertices().size() == 1,
+            "corner clipping should retain only the obstacle vertex strictly inside the operation area");
+        require(pointsNear(graph.vertices().front().pos, Point2(8.0, 8.0)),
+            "the retained corner-obstacle graph vertex should be the interior input vertex");
+    }
+
+    void operationAreaDiscardsZeroAreaObstacleContacts()
+    {
+        const Polygon pointContact{
+            Point2(10.0, 10.0),
+            Point2(12.0, 10.0),
+            Point2(12.0, 12.0),
+            Point2(10.0, 12.0)
+        };
+        const Polygon edgeContact{
+            Point2(2.0, 10.0),
+            Point2(8.0, 10.0),
+            Point2(8.0, 12.0),
+            Point2(2.0, 12.0)
+        };
+
+        VisibilityGraph pointGraph(makeOperationArea(), { pointContact });
+        VisibilityGraph edgeGraph(makeOperationArea(), { edgeContact });
+
+        require(pointGraph.obstacles().empty(),
+            "an obstacle touching only one operation-area point should be discarded");
+        require(edgeGraph.obstacles().empty(),
+            "an obstacle sharing only an operation-area edge should be discarded");
+    }
+
+    void operationAreaPreservesOriginalAndClippedObstacleViews()
+    {
+        const Polygon contained{
+            Point2(2.0, 2.0),
+            Point2(4.0, 2.0),
+            Point2(4.0, 4.0),
+            Point2(2.0, 4.0)
+        };
+        const Polygon crossing{
+            Point2(8.0, 5.0),
+            Point2(12.0, 5.0),
+            Point2(12.0, 7.0),
+            Point2(8.0, 7.0)
+        };
+        const Polygon outside{
+            Point2(12.0, 1.0),
+            Point2(14.0, 1.0),
+            Point2(14.0, 3.0),
+            Point2(12.0, 3.0)
+        };
+
+        VisibilityGraph graph(makeOperationArea(),
+            { contained, crossing, outside });
+
+        require(graph.originalObstacles().size() == 3,
+            "the original obstacle view should preserve all validated input obstacles");
+        require(graph.obstacles().size() == 2,
+            "the effective obstacle view should omit fully outside obstacles");
+        require(graph.clippedObstacles().size() == 1,
+            "the clipped obstacle view should contain only changed positive-area geometry");
+        require(graph.clippedObstacles().front().size() == 4,
+            "the tracked clipped obstacle should contain its effective vertices");
     }
 
     void queryInsideObstacleIsRejected()
@@ -300,6 +704,23 @@ namespace
         { "Shortest path routes around square", shortestPathRoutesAroundSquare },
         { "Obstacle boundary excludes interior chord", obstacleBoundaryEdgesExcludeInteriorChord },
         { "Small-scale obstacle blocks direct path", smallScaleObstacleBlocksDirectPath },
+        { "Convex counter-clockwise obstacle is accepted", convexCounterClockwiseObstacleIsAccepted },
+        { "Convex obstacle permits collinear boundary vertex", convexObstacleMayContainCollinearBoundaryVertex },
+        { "Concave obstacle is rejected", concaveObstacleIsRejected },
+        { "Clockwise obstacle is rejected", clockwiseObstacleIsRejected },
+        { "Operation area supports contained queries", operationAreaSupportsContainedQueries },
+        { "Original constructor has no operation area", graphWithoutOperationAreaPreservesExistingBehavior },
+        { "Invalid operation areas are rejected", invalidOperationAreasAreRejected },
+        { "Operation area rejects non-interior queries", operationAreaRejectsQueriesNotStrictlyInside },
+        { "Operation area retains contained obstacle", operationAreaRetainsContainedObstacle },
+        { "Operation area retains boundary obstacle", operationAreaRetainsObstacleOnBoundary },
+        { "Operation area discards outside obstacle", operationAreaDiscardsOutsideObstacle },
+        { "Operation area clips crossing obstacle", operationAreaClipsCrossingObstacleAndRoutesAroundIt },
+        { "Operation area clips crossing with outside vertices", operationAreaClipsCrossingObstacleWithAllVerticesOutside },
+        { "Operation area clips containing obstacle", operationAreaClipsObstacleContainingEntireArea },
+        { "Operation area clips corner-crossing obstacle", operationAreaClipsObstacleCrossingCorner },
+        { "Operation area discards zero-area contacts", operationAreaDiscardsZeroAreaObstacleContacts },
+        { "Operation area preserves obstacle views", operationAreaPreservesOriginalAndClippedObstacleViews },
         { "Query inside obstacle is rejected", queryInsideObstacleIsRejected },
         { "Undersized polygon is ignored", undersizedPolygonIsIgnored },
         { "Identical start and goal", identicalStartAndGoalReturnsZeroLengthPath },

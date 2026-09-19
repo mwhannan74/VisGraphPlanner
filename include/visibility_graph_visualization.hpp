@@ -4,7 +4,8 @@
  *
  * ────
  * Core features
- *   • Renders polygon obstacles, graph edges, and an optional shortest path.
+ *   • Renders an optional operation area, original and clipped obstacles,
+ *     graph edges, and an optional shortest path.
  *   • Highlights start and goal query points.
  *   • Keeps plotting support separate from the core planner header.
  *
@@ -26,8 +27,9 @@ namespace vg
     /**
      * @brief Visualize a visibility graph, query points, and optional path.
      *
-     * Draws the obstacle polygons first, then graph edges, then the shortest
-     * path polyline if provided, and finally the start/goal markers.
+     * Draws the operation-area boundary when present, followed by obstacle
+     * polygons, graph edges, the shortest path polyline if provided, and the
+     * start/goal markers.
      *
      * @param graph     Visibility graph to render.
      * @param start     Start query point.
@@ -51,26 +53,72 @@ namespace vg
         obstacleStyle.fill_color = Color::Blue();
         obstacleStyle.fill_alpha = 0.1f;
 
-        // Draw obstacle polygons.
-        for (const auto& poly : graph.obstacles())
+        ShapeStyle clippedObstacleStyle;
+        clippedObstacleStyle.line_color = Color::Magenta();
+        clippedObstacleStyle.thickness = 2.5f;
+        clippedObstacleStyle.fill_color = Color::Magenta();
+        clippedObstacleStyle.fill_alpha = 0.25f;
+
+        if (graph.hasOperationArea())
         {
+            const auto& operationArea = graph.operationArea();
             std::vector<double> x;
             std::vector<double> y;
-            x.reserve(poly.size());
-            y.reserve(poly.size());
+            x.reserve(operationArea.size() + 1);
+            y.reserve(operationArea.size() + 1);
 
-            for (const auto& p : poly)
+            for (const auto& point : operationArea)
             {
-                x.push_back(p.x());
-                y.push_back(p.y());
+                x.push_back(point.x());
+                y.push_back(point.y());
             }
+            x.push_back(operationArea.front().x());
+            y.push_back(operationArea.front().y());
 
-            fig.polygon(x, y, obstacleStyle);
+            fig.plot(x, y, Color(0, 100, 70), 1.0f, "Operation area boundary");
         }
+
+        const auto drawPolygons = [&fig](const std::vector<Polygon>& polygons,
+            const ShapeStyle& style,
+            const std::string& label)
+        {
+            for (std::size_t i = 0; i < polygons.size(); ++i)
+            {
+                const auto& poly = polygons[i];
+                std::vector<double> x;
+                std::vector<double> y;
+                x.reserve(poly.size());
+                y.reserve(poly.size());
+
+                for (const auto& p : poly)
+                {
+                    x.push_back(p.x());
+                    y.push_back(p.y());
+                }
+
+                fig.polygon(x, y, style);
+                if (i == 0 && poly.size() >= 2)
+                {
+                    fig.plot(
+                        { poly[0].x(), poly[1].x() },
+                        { poly[0].y(), poly[1].y() },
+                        style.line_color,
+                        style.thickness,
+                        label);
+                }
+            }
+        };
+
+        // Draw every original obstacle, including portions outside the
+        // operation area, then highlight positive-area clipped results.
+        drawPolygons(graph.originalObstacles(), obstacleStyle, "Original obstacle");
+        drawPolygons(graph.clippedObstacles(), clippedObstacleStyle, "Clipped obstacle");
 
         // Draw each undirected graph edge once.
         const auto& adjacency = graph.adjacency();
         const auto& vertices = graph.vertices();
+        const Color visibilityEdgeColor(70, 70, 70);
+        bool visibilityEdgeLabeled = false;
         for (std::size_t i = 0; i < adjacency.size(); ++i)
         {
             const auto& pi = vertices[i].pos;
@@ -79,8 +127,32 @@ namespace vg
                 if (i >= e.to) continue;
 
                 const auto& pj = vertices[e.to].pos;
-                fig.plot({ pi.x(), pj.x() }, { pi.y(), pj.y() }, Color::Black(), 1.0f);
+                fig.plot(
+                    { pi.x(), pj.x() },
+                    { pi.y(), pj.y() },
+                    visibilityEdgeColor,
+                    3.0f,
+                    visibilityEdgeLabeled ? "" : "Visibility edge");
+                visibilityEdgeLabeled = true;
             }
+        }
+
+        // Mark graph vertices explicitly so polygon corners that participate
+        // in the visibility graph are distinguishable from decorative outlines.
+        if (!vertices.empty())
+        {
+            std::vector<double> vertexX;
+            std::vector<double> vertexY;
+            vertexX.reserve(vertices.size());
+            vertexY.reserve(vertices.size());
+
+            for (const auto& vertex : vertices)
+            {
+                vertexX.push_back(vertex.pos.x());
+                vertexY.push_back(vertex.pos.y());
+            }
+
+            fig.scatter(vertexX, vertexY, visibilityEdgeColor, 3.0f, "Graph vertex");
         }
 
         // Draw the shortest path polyline when supplied.
@@ -97,7 +169,7 @@ namespace vg
                 py.push_back(pt.y());
             }
 
-            fig.plot(px, py, Color::Red(), 2.5f, "Path");
+            fig.plot(px, py, Color::Red(), 3.5f, "Path");
         }
 
         // Draw query terminals last so they stay visible on top.
@@ -106,7 +178,9 @@ namespace vg
 
         fig.grid(true);
         fig.equal_scale(true);
-        fig.title("Visibility Graph");
+        fig.title(graph.hasOperationArea()
+            ? "Visibility Graph with Operation Area"
+            : "Visibility Graph");
         fig.legend(true);
         fig.show("Visibility Graph");
     }
