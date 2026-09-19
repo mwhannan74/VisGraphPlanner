@@ -1,12 +1,5 @@
 ﻿// main_demo.cpp - Enhanced demo of the VisibilityGraph class with 25 non-overlapping obstacles.
-//
-// Build example (Linux, GCC):
-//   g++ -std=c++17 -O2 main_demo.cpp \
-//       -I/path/to/eigen \
-//       -I/path/to/mpocv/include \
-//       -L/path/to/mpocv/lib -lmpocv  -o demo
-//
-// Adjust include/library paths and linker flags for your platform.
+// Build with the main_demo CMake target; see README.md for instructions.
 // ---------------------------------------------------------------------------
 
 #include "visibility_graph.hpp"
@@ -91,12 +84,12 @@ int main()
     const auto t3 = std::chrono::high_resolution_clock::now();
 
     // 5. Timing output
-    auto build_us = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
-    auto query_us = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
-    auto solve_us = std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count();
-    std::cout << "buildBasic() took " << build_us << " ms\n";
-    std::cout << "Query setup and injectQueryPts() took " << query_us << " ms\n";
-    std::cout << "shortestPath() took " << solve_us << " ms\n";
+    auto build_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+    auto query_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
+    auto solve_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count();
+    std::cout << "buildBasic() took " << build_ms << " ms\n";
+    std::cout << "Query setup and injectQueryPts() took " << query_ms << " ms\n";
+    std::cout << "shortestPath() took " << solve_ms << " ms\n";
     
     std::cout << "Graph has " << vg.numEdges() << " edges\n";
 

@@ -15,18 +15,18 @@ are retained in the effective obstacle geometry for collision checks but are
 excluded from the visibility graph. All graph vertices therefore remain
 strictly inside the operation area.
 
-The planner treats every obstacle corner as a graph vertex. It connects pairs of vertices when the straight segment between them does not cross an obstacle, while rejecting diagonals that pass through the interior of the same polygon. Each edge is weighted by its Euclidean length. For a planning query, the start and goal are added to the graph and connected to the vertices they can see; Dijkstra's algorithm then returns the lowest-distance route available in the graph.
+The planner treats each eligible corner of the normalized, effective obstacles as a graph vertex. When an operation area is present, corners on its boundary are excluded. The planner connects pairs of vertices when the straight segment between them does not cross an obstacle, while rejecting diagonals that pass through the interior of the same polygon. Each edge is weighted by its Euclidean length. For a planning query, the start and goal are added to the graph and connected to the vertices they can see; Dijkstra's algorithm then returns the lowest-distance route available in the graph.
 
-This approach is simple, deterministic, and effective for relatively small static maps, and it naturally produces direct paths that bend around obstacle corners. Its main tradeoff is scalability: the basic all-pairs visibility build is O(N³) in the number of obstacle vertices and can produce a dense graph. The implementation also assumes valid simple polygons, does not support polygon holes or changing obstacles, and uses floating-point geometric tests that may require care with nearly coincident geometry.
+This approach is simple, deterministic, and effective for relatively small static maps, and it naturally produces direct paths that bend around obstacle corners. Its main tradeoff is scalability: the basic all-pairs visibility build is O(N³) in the number of obstacle vertices and can produce a dense graph. The implementation validates its polygon inputs, does not support polygon holes or changing obstacles, and uses floating-point geometric tests that may require care with nearly coincident geometry.
 
 ## Assumptions and Limitations
 
 - Obstacles must be represented as convex, simple polygons. Clockwise input is normalized to counter-clockwise order.
-- Each polygon must contain at least three vertices.
+- Obstacle inputs with fewer than three vertices are ignored with a warning. An operation area must contain at least three distinct, non-collinear vertices after normalization.
 - Repeated closing vertices, consecutive duplicates, and redundant collinear boundary vertices are removed.
 - Non-finite, self-intersecting, degenerate, and concave polygons are rejected.
 - Polygon holes are not supported.
-- Start and goal points must be outside every obstacle and must not lie on an obstacle boundary.
+- Start and goal coordinates must be finite. Both points must be outside every obstacle and must not lie on an obstacle boundary.
 - When an operation area is supplied, it must be convex and simple, and start and goal must be strictly inside it.
 - Obstacles crossing an operation-area boundary are clipped to the portion inside the area.
 - The obstacle visibility graph is constructed using a naive O(N³) algorithm, where N is the number of obstacle vertices.
@@ -46,26 +46,25 @@ To run the deterministic operation-area and obstacle-clipping demo:
 .\build\Release\operation_area_demo.exe
 ```
 
-The operation-area demo includes an obstacle inside the area, an obstacle
-clipped at one boundary, an entirely outside obstacle that is discarded, and
-an obstacle whose original vertices are all outside but whose edges cross an
-operation-area corner. Original obstacles are drawn in blue, while their
-positive-area clipped results are overlaid in magenta. The operation-area
-boundary is a thin dark-green outline. Usable visibility-graph edges are drawn as
-thin gray lines with explicit vertex markers, and the final path is drawn
-over them in red.
+The operation-area demo uses four alternating boundary-crossing barriers and
+three interior obstacles to create a constrained route. It also includes an
+entirely outside obstacle that is discarded and a diamond whose original
+vertices are outside but whose edges cross an operation-area corner. Original
+obstacles are drawn in blue, while their positive-area clipped results are
+overlaid in magenta. The operation-area boundary is a thin dark-green outline.
+Usable visibility-graph edges are drawn as thin gray lines with explicit vertex
+markers, and the final path is drawn over them in red.
 
 **Example Terminal Output:**
 ```
 buildBasic() took 1 ms
+Query setup and injectQueryPts() took 0 ms
 shortestPath() took 0 ms
 Graph has 915 edges
 Path found with 6 waypoints
 ```
 
 Values vary between runs because the demo randomizes the obstacle positions and start and goal points.
-
-![Visibility graph demo showing the planned path through polygonal obstacles](images/visibility_graph_demo.png)
 
 With a single-configuration generator, the executable is normally `build/main_demo` (`build/main_demo.exe` on Windows). The exact location depends on the selected CMake generator and build configuration.
 

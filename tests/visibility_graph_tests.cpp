@@ -87,6 +87,19 @@ namespace
         return length;
     }
 
+    double signedAreaTwice(const Polygon& polygon)
+    {
+        const Point2& origin = polygon.front();
+        double area = 0.0;
+        for (std::size_t i = 1; i + 1 < polygon.size(); ++i)
+        {
+            const Point2 first = polygon[i] - origin;
+            const Point2 second = polygon[i + 1] - origin;
+            area += first.x() * second.y() - first.y() * second.x();
+        }
+        return area;
+    }
+
     bool hasEdge(const VisibilityGraph& graph, std::size_t from, std::size_t to)
     {
         for (const auto& edge : graph.adjacency().at(from))
@@ -461,6 +474,8 @@ namespace
         VisibilityGraph clockwiseGraph(clockwise, {});
         require(clockwiseGraph.operationArea().size() == 4,
             "a clockwise operation area should be accepted after normalization");
+        require(signedAreaTwice(clockwiseGraph.operationArea()) > 0.0,
+            "a clockwise operation area should be normalized to counter-clockwise winding");
     }
 
     void operationAreaRejectsQueriesNotStrictlyInside()
@@ -810,21 +825,15 @@ namespace
             "rebuilt adjacency should contain obstacle vertices only");
     }
 
-    void queryBeforeBuildIsNotSilentlyIncomplete()
+    void queryBeforeBuildIsRejected()
     {
         VisibilityGraph graph({ makeSquare() });
 
-        try
-        {
-            const auto [startId, goalId] = graph.injectQueryPts(Point2(-1.0, 2.0), Point2(5.0, 2.0));
-            const auto path = graph.shortestPath(startId, goalId);
-            require(!path.empty(),
-                "query before build must either construct a complete graph or reject the call");
-        }
-        catch (const std::logic_error&)
-        {
-            return;
-        }
+        requireThrows<std::logic_error>(
+            [&graph] {
+                graph.injectQueryPts(Point2(-1.0, 2.0), Point2(5.0, 2.0));
+            },
+            "injectQueryPts should reject a query before buildBasic is called");
     }
 
     struct TestCase
@@ -868,7 +877,7 @@ namespace
         { "Query on vertex is rejected", queryOnVertexIsRejected },
         { "Repeated queries replace old queries", repeatedQueriesDoNotAccumulateVertices },
         { "Rebuild restores obstacle-only graph", rebuildRestoresObstacleOnlyGraph },
-        { "Query before build is not silently incomplete", queryBeforeBuildIsNotSilentlyIncomplete }
+        { "Query before build is rejected", queryBeforeBuildIsRejected }
     };
 }
 
