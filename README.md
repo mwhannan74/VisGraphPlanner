@@ -50,7 +50,7 @@ an obstacle whose original vertices are all outside but whose edges cross an
 operation-area corner. Original obstacles are drawn in blue, while their
 positive-area clipped results are overlaid in magenta. The operation-area
 boundary is a thin dark-green outline. Usable visibility-graph edges are drawn as
-thicker gray lines with explicit vertex markers, and the final path is drawn
+thin gray lines with explicit vertex markers, and the final path is drawn
 over them in red.
 
 **Example Terminal Output:**

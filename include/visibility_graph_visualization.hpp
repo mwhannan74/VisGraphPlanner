@@ -131,7 +131,7 @@ namespace vg
                     { pi.x(), pj.x() },
                     { pi.y(), pj.y() },
                     visibilityEdgeColor,
-                    3.0f,
+                    1.0f,
                     visibilityEdgeLabeled ? "" : "Visibility edge");
                 visibilityEdgeLabeled = true;
             }
