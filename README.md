@@ -1,5 +1,7 @@
 # VisGraphPlanner
 
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
+
 A C++ visibility-graph planner for static 2-D polygonal environments.
 
 VisGraphPlanner constructs and uses a visibility graph for path planning around polygonal obstacles. The core planner is a header-only CMake target. Optional visualization support and the demonstration executables use [MatPlotOpenCV](https://github.com/mwhannan74/MatPlotOpenCV).
