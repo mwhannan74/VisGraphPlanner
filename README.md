@@ -53,7 +53,8 @@ vertices are outside but whose edges cross an operation-area corner. Original
 obstacles are drawn in blue, while their positive-area clipped results are
 overlaid in magenta. The operation-area boundary is a thin dark-green outline.
 Usable visibility-graph edges are drawn as thin gray lines with explicit vertex
-markers, and the final path is drawn over them in red.
+markers, and the final path is drawn over them in orange with a marker at each
+selected waypoint. The goal remains red.
 
 **Example Terminal Output:**
 ```

@@ -158,9 +158,10 @@ namespace vg
             fig.scatter(vertexX, vertexY, visibilityEdgeColor, 3.0f, "Graph vertex");
         }
 
-        // Draw the shortest path polyline when supplied.
+        // Draw the shortest path and its waypoints when supplied.
         if (!path.empty())
         {
+            const Color pathColor(255, 140, 0);
             std::vector<double> px;
             std::vector<double> py;
             px.reserve(path.size());
@@ -172,7 +173,8 @@ namespace vg
                 py.push_back(pt.y());
             }
 
-            fig.plot(px, py, Color::Red(), 3.5f, "Path");
+            fig.plot(px, py, pathColor, 3.5f, "Path");
+            fig.scatter(px, py, pathColor, 5.0f, "Path waypoint");
         }
 
         // Draw query terminals last so they stay visible on top.
@@ -184,7 +186,7 @@ namespace vg
         fig.title(graph.hasOperationArea()
             ? "Visibility Graph with Operation Area"
             : "Visibility Graph");
-        fig.legend(true);
+        fig.legend(true, "southEast");
         fig.show("Visibility Graph");
     }
 }
